@@ -1,4 +1,6 @@
 from datetime import datetime, timezone, timedelta
+import json
+import os
 import time
 import urllib.parse
 import numpy as np
@@ -16,6 +18,27 @@ COT = timezone(timedelta(hours=-5))
 # ID DEL GOOGLE SHEET
 # ---------------------------------------------------------
 SPREADSHEET_ID = "1CvPEtDspm7g3T7yXDluEUD7kGyWH5abNAP1nkalX6sI"
+
+# ---------------------------------------------------------
+# ARCHIVO DE PERSISTENCIA LOCAL PARA LA BITÁCORA
+# ---------------------------------------------------------
+BITACORA_FILE = "bitacora_storage.json"
+
+def cargar_bitacora_local():
+    if os.path.exists(BITACORA_FILE):
+        try:
+            with open(BITACORA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def guardar_bitacora_local(mensajes):
+    try:
+        with open(BITACORA_FILE, "w", encoding="utf-8") as f:
+            json.dump(mensajes, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 # ---------------------------------------------------------
 # LISTA DE INVOLUCRADOS (EMISORES Y RECEPTORES)
@@ -47,9 +70,10 @@ st.set_page_config(
 # ---------------------------------------------------------
 @st.cache_resource
 def obtener_estado_global():
+    mensajes_guardados = cargar_bitacora_local()
     return {
-        "mensajes_bitacora": [],       # Historial estructurado de chat de bitácora
-        "cargado_gsheet": False,       # Bandera de lectura inicial desde Google Sheets
+        "mensajes_bitacora": mensajes_guardados, # Historial persistido de chat de bitácora
+        "cargado_gsheet": False,                 # Bandera de lectura inicial desde Google Sheets
     }
 
 ESTADO_GLOBAL = obtener_estado_global()
@@ -602,7 +626,8 @@ def render_dark_table(df_page):
     if df_page.empty:
         return "<div style='color: #9CA3AF; text-align: center; padding: 10px; font-size: 13px;'>Sin datos o registros coincidentes.</div>"
 
-    headers = list(df_page.columns)
+    # Filtrar cualquier columna oculta para que no aparezca en la cabecera visual
+    headers = [c for c in list(df_page.columns) if "OCULT" not in str(c).upper()]
 
     col_resp = next((c for c in headers if "RESP" in c.upper()), None)
     col_cer = next((c for c in headers if "CER" in c.upper() and "FIRM" in c.upper()), None)
@@ -621,12 +646,12 @@ def render_dark_table(df_page):
 
     for idx, row in df_page.iterrows():
         cer_val = str(row[col_cer]).strip().upper() if col_cer and pd.notna(row[col_cer]) else ""
-        crm_sal_val = str(row[col_crm_salida]).strip().upper() if col_crm_salida and pd.notna(row[col_crm_salida]) else ""
 
         es_correccion = "CORREC" in cer_val
         cer_es_si = cer_val in ["SI", "SÍ"]
-        crm_vacio = crm_sal_val not in ["SI", "SÍ"]
-        es_atascada = cer_es_si and crm_vacio
+        
+        # NUEVA REGLA: Atascado si Cer firmado tiene algo diferente a SI (independiente de otras columnas)
+        es_atascada = (not cer_es_si) and (not es_correccion)
 
         if es_correccion:
             tr_style = 'style="border-bottom: 1px solid #EF4444;" class="row-correccion"'
@@ -646,12 +671,12 @@ def render_dark_table(df_page):
                 td_style = "padding: 4px 4px; text-align: center; width: 75px; white-space: nowrap;"
                 badge = f'<span style="color: #38BDF8; font-weight: 700; font-size: 11.5px;">{val}</span>'
             elif h == col_orden and es_atascada:
-                badge = f'{val} <span style="background-color: rgba(245, 158, 11, 0.25); color: #FBBF24; border: 1px solid #F59E0B; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Certificado firmado pero sin registro de CRM Salida">⚠️ Atascada</span>'
+                badge = f'{val} <span style="background-color: rgba(245, 158, 11, 0.25); color: #FBBF24; border: 1px solid #F59E0B; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Certificado pendiente de firma">⚠️ Atascada</span>'
             elif val_upper in ["SI", "SÍ"]:
                 badge = '<span style="background-color: rgba(16, 185, 129, 0.2); color: #A7F3D0; border: 1px solid #10B981; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">Si</span>'
             elif val != "":
                 if any(k in val_upper for k in ["CORREC", "ERROR", "RECHAZ", "CANCEL"]):
-                    badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠️</span>'
+                    badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠️️</span>'
                 elif h in [col_env, col_crm_salida, col_cer] or any(k in val_upper for k in ["APROBAC", "PENDIENTE", "P.", "FIRMAR", "REVISAR"]):
                     badge = f'<span style="background-color: rgba(245, 158, 11, 0.2); color: #FDE68A; border: 1px solid #F59E0B; padding: 1px 6px; border-radius: 4px; font-weight: 600; font-size: 10.5px;">{val}</span>'
                 else:
@@ -677,9 +702,6 @@ def obtener_orden_mensaje(msg):
     pr_rank = prio_rank.get(msg.get("prioridad", "Normal"), 3)
     ts = msg.get("timestamp", 0)
 
-    # Pendientes primero -> ordenados por prioridad (Urgente > Auditoría > Normal)
-    # y luego por timestamp ascendente (el que lleva más tiempo en espera aparece primero)
-    # Atendidos al final -> ordenados por prioridad y luego los más recientes primero
     if st_rank == 1:
         return (1, pr_rank, ts)
     else:
@@ -876,7 +898,7 @@ def render_tablero_fluido():
     df_main, df_bitacora, info_estado = cargar_datos_gsheets()
 
     if "mensajes_bitacora" not in ESTADO_GLOBAL:
-        ESTADO_GLOBAL["mensajes_bitacora"] = []
+        ESTADO_GLOBAL["mensajes_bitacora"] = cargar_bitacora_local()
 
     # MIGRACIÓN DE MENSAJES EXISTENTES
     for m in ESTADO_GLOBAL["mensajes_bitacora"]:
@@ -895,6 +917,7 @@ def render_tablero_fluido():
         col_rec = next((c for c in df_bitacora.columns if "PARA" in str(c).upper() or "RECEPTOR" in str(c).upper()), None)
 
         now_ts = time.time()
+        cargados_nuevos = False
         for idx_b, r in df_bitacora.iterrows():
             d_val = str(r[col_d] if col_d else "").strip()
             if not d_val:
@@ -914,21 +937,27 @@ def render_tablero_fluido():
             emisor_raw = str(r[col_em]).strip() if col_em and str(r[col_em]).strip() in LISTA_EMISORES else "Jeison Altamar"
             receptor_raw = str(r[col_rec]).strip() if col_rec and str(r[col_rec]).strip() in LISTA_RECEPTORES else "Todos"
 
-            ESTADO_GLOBAL["mensajes_bitacora"].append({
-                "id": f"gs_{idx_b}_{int(now_ts)}",
-                "emisor": emisor_raw,
-                "receptor": receptor_raw,
-                "prioridad": prio_clean,
-                "contenido": d_val,
-                "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M"),
-                "timestamp": now_ts,
-                "estado": est_clean,
-                "usuario_enterado": None,
-                "fecha_enterado": None,
-                "permitir_respuestas": False,
-                "mostrar_respuestas": False,
-                "respuestas": []
-            })
+            msg_id_gs = f"gs_{idx_b}_{d_val[:15]}"
+            if not any(m.get("id") == msg_id_gs for m in ESTADO_GLOBAL["mensajes_bitacora"]):
+                ESTADO_GLOBAL["mensajes_bitacora"].append({
+                    "id": msg_id_gs,
+                    "emisor": emisor_raw,
+                    "receptor": receptor_raw,
+                    "prioridad": prio_clean,
+                    "contenido": d_val,
+                    "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M"),
+                    "timestamp": now_ts,
+                    "estado": est_clean,
+                    "usuario_enterado": None,
+                    "fecha_enterado": None,
+                    "permitir_respuestas": False,
+                    "mostrar_respuestas": False,
+                    "respuestas": []
+                })
+                cargados_nuevos = True
+
+        if cargados_nuevos:
+            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
         ESTADO_GLOBAL["cargado_gsheet"] = True
 
     # VERIFICAR Y DISPARAR NOTIFICACIONES Y SONIDOS A CADA NAVEGADOR ABIERTO
@@ -973,8 +1002,10 @@ def render_tablero_fluido():
         "CRM salida",
         "Aprob. Comercial",
         "CRM cert.",
+        "Oculto",
     ]
     df_vista = pd.DataFrame()
+    df_ocultas = pd.DataFrame()
     df_hoy = pd.DataFrame()
     df_anteriores_incompletas = pd.DataFrame()
 
@@ -1011,6 +1042,8 @@ def render_tablero_fluido():
                 mapa_cols[col] = "Aprob. Comercial"
             elif ("CRM" in c_upper and "CERT" in c_upper) and "CRM cert." not in mapa_cols.values():
                 mapa_cols[col] = "CRM cert."
+            elif "OCULT" in c_upper and "Oculto" not in mapa_cols.values():
+                mapa_cols[col] = "Oculto"
 
         if "Responsables" not in mapa_cols.values() and len(cols_raw) >= 3:
             col_pos2 = cols_raw[2]
@@ -1024,6 +1057,15 @@ def render_tablero_fluido():
 
         cols_existentes = [c for c in cols_deseadas if c in df_renamed.columns]
         df_vista = df_renamed[cols_existentes].copy()
+
+        # MANEJO DE COLUMNA OCULTO
+        if "Oculto" in df_vista.columns:
+            df_vista["_oculto_val"] = df_vista["Oculto"].astype(str).str.strip().str.upper()
+            es_oculta = df_vista["_oculto_val"].isin(["SI", "SÍ", "TRUE", "OCULTO", "1"])
+            df_ocultas = df_vista[es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
+            df_vista = df_vista[~es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
+        else:
+            df_ocultas = pd.DataFrame()
 
         col_ord_main = (
             "# Orden"
@@ -1081,15 +1123,13 @@ def render_tablero_fluido():
             total_pend = max(0, total_reg - total_env)
 
             col_cer_check = next((c for c in df_vista.columns if "CER" in c.upper()), None)
-            col_crm_check = next((c for c in df_vista.columns if "CRM" in c.upper() and "SALIDA" in c.upper()), None)
             
             for _, r_m in df_vista.iterrows():
                 cer_m = str(r_m[col_cer_check]).strip().upper() if col_cer_check else ""
-                crm_m = str(r_m[col_crm_check]).strip().upper() if col_crm_check else ""
                 
                 if "CORREC" in cer_m:
                     cant_correcciones += 1
-                elif cer_m in ["SI", "SÍ"] and crm_m not in ["SI", "SÍ"]:
+                elif cer_m not in ["SI", "SÍ"]: # REGLA: Atascado si cer firmado es diferente a SI
                     cant_atascadas += 1
 
             df_hoy = df_vista[df_vista["Fecha_dt"] == hoy_dt].copy()
@@ -1189,12 +1229,11 @@ def render_tablero_fluido():
                     st.button("❌", on_click=borrar_busqueda, key="btn_x_clear", help="Limpiar búsqueda")
 
         col_cer_f = next((c for c in df_vista.columns if "CER" in c.upper()), None)
-        col_crm_f = next((c for c in df_vista.columns if "CRM" in c.upper() and "SALIDA" in c.upper()), None)
 
-        if st.session_state.alert_filter == "ATASCADAS" and col_cer_f and col_crm_f:
+        if st.session_state.alert_filter == "ATASCADAS" and col_cer_f:
             df_vista = df_vista[
-                df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"])
-                & (~df_vista[col_crm_f].astype(str).str.upper().isin(["SI", "SÍ"]))
+                (~df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"]))
+                & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
             ]
         elif st.session_state.alert_filter == "CORRECCION" and col_cer_f:
             df_vista = df_vista[df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False)]
@@ -1425,6 +1464,7 @@ def render_tablero_fluido():
                         "respuestas": []
                     }
                     ESTADO_GLOBAL["mensajes_bitacora"].insert(0, nuevo_msg)
+                    guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                     st.session_state.emisor_local = emisor_sel
                     st.success("✅ Novedad registrada.")
                     st.rerun()
@@ -1474,11 +1514,13 @@ def render_tablero_fluido():
                             msg["estado"] = "Atendido"
                             msg["usuario_enterado"] = usr_confirm
                             msg["fecha_enterado"] = datetime.now(COT).strftime("%d/%m/%Y %H:%M:%S")
+                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.session_state.emisor_local = usr_confirm
                             st.rerun()
                     with c_del:
                         if st.button("🗑️ Borrar", key=f"btn_del_urg_{msg['id']}_{idx_m}"):
                             ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m["id"] != msg["id"]]
+                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.rerun()
 
                 else:
@@ -1486,6 +1528,7 @@ def render_tablero_fluido():
                     with c_del_at:
                         if st.button("🗑️ Eliminar", key=f"btn_del_atend_{msg['id']}_{idx_m}"):
                             ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m["id"] != msg["id"]]
+                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.rerun()
 
                 # SECCIÓN DE RESPUESTAS HILADAS (SOLO SI SE HABILITÓ AL CREAR LA NOVEDAD)
@@ -1524,6 +1567,7 @@ def render_tablero_fluido():
                                         "texto": txt_resp.strip(),
                                         "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M")
                                     })
+                                    guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                                     st.session_state.emisor_local = usr_resp
                                     st.rerun()
                             st.markdown("</div>", unsafe_allow_html=True)
@@ -1531,6 +1575,14 @@ def render_tablero_fluido():
                 st.markdown("<div style='margin-bottom: 6px;'></div>", unsafe_allow_html=True)
 
             st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------------------------------------------------
+    # BOTÓN / DESPLEGABLE DE ÓRDENES OCULTAS (PARTE TOTALMENTE INFERIOR)
+    # ---------------------------------------------------------
+    if not df_ocultas.empty:
+        st.markdown("<hr style='border-color: #1F2937; margin: 12px 0 8px 0;'>", unsafe_allow_html=True)
+        with st.expander(f"👁️ Desplegar Órdenes Ocultas ({len(df_ocultas)})", expanded=False):
+            st.markdown(render_dark_table(df_ocultas), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------
