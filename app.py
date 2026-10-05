@@ -393,7 +393,7 @@ def solicitar_permisos_notificaciones_js():
                     if (perm === "granted") {
                         alert("✅ Notificaciones del sistema y sonido activados correctamente.");
                     } else {
-                        alert("⚠️️ Debes permitir las notificaciones en el navegador para recibir las alertas flotantes.");
+                        alert("⚠ Debes permitir las notificaciones en el navegador para recibir las alertas flotantes.");
                     }
                 });
             }
@@ -626,7 +626,7 @@ def render_dark_table(df_page):
     if df_page.empty:
         return "<div style='color: #9CA3AF; text-align: center; padding: 10px; font-size: 13px;'>Sin datos o registros coincidentes.</div>"
 
-    # Filtrar cualquier columna oculta para que no aparezca en la cabecera visual
+    # Filtrar cualquier columna oculta para que no aparezca en la cabecera visual de control
     headers = [c for c in list(df_page.columns) if "OCULT" not in str(c).upper() and "VISIBL" not in str(c).upper()]
 
     col_resp = next((c for c in headers if "RESP" in c.upper()), None)
@@ -672,6 +672,8 @@ def render_dark_table(df_page):
                 badge = f'<span style="color: #38BDF8; font-weight: 700; font-size: 11.5px;">{val}</span>'
             elif h == col_orden and es_atascada:
                 badge = f'{val} <span style="background-color: rgba(245, 158, 11, 0.25); color: #FBBF24; border: 1px solid #F59E0B; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Certificado pendiente de firma">⚠️ Atascada</span>'
+            elif h == col_orden and es_correccion:
+                badge = f'{val} <span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Orden en corrección urgente">🚨 Urgente</span>'
             elif val_upper in ["SI", "SÍ"]:
                 badge = '<span style="background-color: rgba(16, 185, 129, 0.2); color: #A7F3D0; border: 1px solid #10B981; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">Si</span>'
             elif val != "":
@@ -1003,6 +1005,7 @@ def render_tablero_fluido():
         "Aprob. Comercial",
         "CRM cert.",
         "Oculto",
+        "Observaciones",
     ]
     df_vista = pd.DataFrame()
     df_ocultas = pd.DataFrame()
@@ -1044,6 +1047,8 @@ def render_tablero_fluido():
                 mapa_cols[col] = "CRM cert."
             elif ("OCULT" in c_upper or "VISIBL" in c_upper) and "Oculto" not in mapa_cols.values():
                 mapa_cols[col] = "Oculto"
+            elif any(k in c_upper for k in ["OBSERVA", "OBS", "COMENTARIO"]) and "Observaciones" not in mapa_cols.values():
+                mapa_cols[col] = "Observaciones"
 
         if "Responsables" not in mapa_cols.values() and len(cols_raw) >= 3:
             col_pos2 = cols_raw[2]
@@ -1058,7 +1063,7 @@ def render_tablero_fluido():
         cols_existentes = [c for c in cols_deseadas if c in df_renamed.columns]
         df_vista = df_renamed[cols_existentes].copy()
 
-        # MANEJO DE COLUMNA OCULTO / VISIBLE
+        # MANEJO DE COLUMNA OCULTO / VISIBLE Y OBSERVACIONES PARA OCULTOS
         if "Oculto" in df_vista.columns:
             df_vista["_oculto_val"] = df_vista["Oculto"].astype(str).str.strip().str.upper()
             es_oculta = (
@@ -1066,10 +1071,25 @@ def render_tablero_fluido():
                 | df_vista["_oculto_val"].str.contains("NO", na=False)
                 | df_vista["_oculto_val"].str.contains("FALSE", na=False)
             )
+
+            # Si no existe la columna Observaciones explícita, se obtiene el detalle desde Oculto
+            if "Observaciones" not in df_vista.columns:
+                df_vista["Observaciones"] = df_vista["Oculto"].apply(
+                    lambda v: "" if str(v).strip().upper() in ["SI", "SÍ", "NO", "TRUE", "FALSE", "OCULTO", "1", "0", ""] else str(v).strip()
+                )
+            else:
+                mask_empty = df_vista["Observaciones"].astype(str).str.strip() == ""
+                df_vista.loc[mask_empty, "Observaciones"] = df_vista.loc[mask_empty, "Oculto"].apply(
+                    lambda v: "" if str(v).strip().upper() in ["SI", "SÍ", "NO", "TRUE", "FALSE", "OCULTO", "1", "0", ""] else str(v).strip()
+                )
+
+            # Las ocultas conservan la columna de Observaciones
             df_ocultas = df_vista[es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
-            df_vista = df_vista[~es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
+            # La vista principal retira 'Observaciones' para mantener la interfaz intacta
+            df_vista = df_vista[~es_oculta].drop(columns=["Oculto", "_oculto_val", "Observaciones"], errors="ignore").copy()
         else:
             df_ocultas = pd.DataFrame()
+            df_vista = df_vista.drop(columns=["Observaciones"], errors="ignore")
 
         col_ord_main = (
             "# Orden"
