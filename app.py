@@ -626,7 +626,6 @@ def render_dark_table(df_page):
     if df_page.empty:
         return "<div style='color: #9CA3AF; text-align: center; padding: 10px; font-size: 13px;'>Sin datos o registros coincidentes.</div>"
 
-    # Filtrar cualquier columna oculta para que no aparezca en la cabecera visual de control
     headers = [c for c in list(df_page.columns) if "OCULT" not in str(c).upper() and "VISIBL" not in str(c).upper()]
 
     col_resp = next((c for c in headers if "RESP" in c.upper()), None)
@@ -648,13 +647,16 @@ def render_dark_table(df_page):
         cer_val = str(row[col_cer]).strip().upper() if col_cer and pd.notna(row[col_cer]) else ""
 
         es_correccion = "CORREC" in cer_val
+        es_revisado = "REVISADO" in cer_val
         cer_es_si = cer_val in ["SI", "SÍ"]
         
-        # REGLA ACTUALIZADA: Atascado solo si Cer firmado tiene algo DIFERENTE de SI y NO está en blanco
-        es_atascada = (not cer_es_si) and (not es_correccion) and (cer_val != "")
+        # Atascado solo si Cer firmado tiene algo DIFERENTE de SI, no es corrección, no es revisado y NO está en blanco
+        es_atascada = (not cer_es_si) and (not es_correccion) and (not es_revisado) and (cer_val != "")
 
         if es_correccion:
             tr_style = 'style="border-bottom: 1px solid #EF4444;" class="row-correccion"'
+        elif es_revisado:
+            tr_style = 'style="border-bottom: 1px solid #3B82F6; background-color: rgba(59, 130, 246, 0.08); border-left: 4px solid #3B82F6;"'
         elif es_atascada:
             tr_style = 'style="border-bottom: 1px solid #F59E0B; background-color: rgba(245, 158, 11, 0.08); border-left: 4px solid #F59E0B;"'
         else:
@@ -679,6 +681,8 @@ def render_dark_table(df_page):
             elif val != "":
                 if any(k in val_upper for k in ["CORREC", "ERROR", "RECHAZ", "CANCEL"]):
                     badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠</span>'
+                elif "REVISADO" in val_upper:
+                    badge = f'<span style="background-color: rgba(59, 130, 246, 0.2); color: #60A5FA; border: 1px solid #3B82F6; padding: 1px 6px; border-radius: 4px; font-weight: 600; font-size: 10.5px;">{val}</span>'
                 elif h in [col_env, col_crm_salida, col_cer] or any(k in val_upper for k in ["APROBAC", "PENDIENTE", "P.", "FIRMAR", "REVISAR"]):
                     badge = f'<span style="background-color: rgba(245, 158, 11, 0.2); color: #FDE68A; border: 1px solid #F59E0B; padding: 1px 6px; border-radius: 4px; font-weight: 600; font-size: 10.5px;">{val}</span>'
                 else:
@@ -724,7 +728,6 @@ def render_chat_message_html(msg, cycle_sec=0, cycle_num=0):
     fecha_enterado = msg.get("fecha_enterado", None)
     respuestas = msg.get("respuestas", [])
 
-    # CÁLCULO DE TIEMPO TRANSCURRIDO (DESDE CREACIÓN)
     now_curr = time.time()
     ts_msg = msg.get("timestamp", now_curr)
     elapsed_sec = max(0, int(now_curr - ts_msg))
@@ -737,7 +740,6 @@ def render_chat_message_html(msg, cycle_sec=0, cycle_num=0):
     else:
         time_elapsed_str = "⏱️ Hace un momento"
 
-    # HTML DE RESPUESTAS HILADAS
     respuestas_html = ""
     if respuestas:
         respuestas_html += "<div style='margin-top: 6px; display: flex; flex-direction: column; gap: 4px;'>"
@@ -902,7 +904,6 @@ def render_tablero_fluido():
     if "mensajes_bitacora" not in ESTADO_GLOBAL:
         ESTADO_GLOBAL["mensajes_bitacora"] = cargar_bitacora_local()
 
-    # MIGRACIÓN DE MENSAJES EXISTENTES
     for m in ESTADO_GLOBAL["mensajes_bitacora"]:
         if "permitir_respuestas" not in m:
             m["permitir_respuestas"] = False
@@ -962,7 +963,6 @@ def render_tablero_fluido():
             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
         ESTADO_GLOBAL["cargado_gsheet"] = True
 
-    # VERIFICAR Y DISPARAR NOTIFICACIONES Y SONIDOS A CADA NAVEGADOR ABIERTO
     mensajes_bit = ESTADO_GLOBAL.get("mensajes_bitacora", [])
     if mensajes_bit:
         ultimo_msg = mensajes_bit[0]
@@ -977,7 +977,6 @@ def render_tablero_fluido():
                     sound_enabled=st.session_state.sound_enabled
                 )
 
-    # EVALUACIÓN DE MENSAJES URGENTES PENDIENTES
     urgentes_pendientes = [
         m for m in ESTADO_GLOBAL["mensajes_bitacora"]
         if m.get("prioridad") == "Urgente" and m.get("estado") == "Pendiente"
@@ -1063,7 +1062,6 @@ def render_tablero_fluido():
         cols_existentes = [c for c in cols_deseadas if c in df_renamed.columns]
         df_vista = df_renamed[cols_existentes].copy()
 
-        # MANEJO DE COLUMNA OCULTO / VISIBLE Y OBSERVACIONES PARA OCULTOS
         if "Oculto" in df_vista.columns:
             df_vista["_oculto_val"] = df_vista["Oculto"].astype(str).str.strip().str.upper()
             es_oculta = (
@@ -1072,7 +1070,6 @@ def render_tablero_fluido():
                 | df_vista["_oculto_val"].str.contains("FALSE", na=False)
             )
 
-            # Si no existe la columna Observaciones explícita, se obtiene el detalle desde Oculto
             if "Observaciones" not in df_vista.columns:
                 df_vista["Observaciones"] = df_vista["Oculto"].apply(
                     lambda v: "" if str(v).strip().upper() in ["SI", "SÍ", "NO", "TRUE", "FALSE", "OCULTO", "1", "0", ""] else str(v).strip()
@@ -1083,9 +1080,7 @@ def render_tablero_fluido():
                     lambda v: "" if str(v).strip().upper() in ["SI", "SÍ", "NO", "TRUE", "FALSE", "OCULTO", "1", "0", ""] else str(v).strip()
                 )
 
-            # Las ocultas conservan la columna de Observaciones
             df_ocultas = df_vista[es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
-            # La vista principal retira 'Observaciones' para mantener la interfaz intacta
             df_vista = df_vista[~es_oculta].drop(columns=["Oculto", "_oculto_val", "Observaciones"], errors="ignore").copy()
         else:
             df_ocultas = pd.DataFrame()
@@ -1153,7 +1148,7 @@ def render_tablero_fluido():
                 
                 if "CORREC" in cer_m:
                     cant_correcciones += 1
-                elif cer_m != "" and cer_m not in ["SI", "SÍ"]: # REGLA: Atascado si cer firmado no está en blanco y es diferente de SI
+                elif cer_m != "" and cer_m not in ["SI", "SÍ"] and "REVISADO" not in cer_m:
                     cant_atascadas += 1
 
             df_hoy = df_vista[df_vista["Fecha_dt"] == hoy_dt].copy()
@@ -1182,7 +1177,6 @@ def render_tablero_fluido():
 
             df_vista = df_vista.drop(columns=["Fecha_dt", "Fecha_Raw"], errors="ignore")
 
-    # 1. KPIs SUPERIORES
     col1, col2, col3, col4 = st.columns(4)
     with col1:
         st.markdown(f'<div class="kpi-card"><div class="kpi-title">REGISTRADAS</div><div class="kpi-value">{total_reg}</div></div>', unsafe_allow_html=True)
@@ -1195,7 +1189,6 @@ def render_tablero_fluido():
 
     st.markdown("<div style='margin-bottom: 2px;'></div>", unsafe_allow_html=True)
 
-    # 2. CONTROLES Y BUSCADOR
     if df_vista is not None and not df_vista.empty:
         col_btn1, col_btn2, col_f_todas, col_f_atasc, col_f_correc, col_search_box, col_info = st.columns(
             [0.55, 0.55, 0.9, 1.2, 1.2, 2.2, 1.5]
@@ -1259,6 +1252,7 @@ def render_tablero_fluido():
                 (df_vista[col_cer_f].astype(str).str.strip() != "")
                 & (~df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"]))
                 & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
+                & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("REVISADO", na=False))
             ]
         elif st.session_state.alert_filter == "CORRECCION" and col_cer_f:
             df_vista = df_vista[df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False)]
@@ -1322,7 +1316,6 @@ def render_tablero_fluido():
 
     st.markdown("<hr style='border-color: #1F2937; margin: 3px 0;'>", unsafe_allow_html=True)
 
-    # 3. SECCIÓN INFERIOR
     c_left, c_middle, c_right = st.columns([1.2, 1.1, 1.2])
 
     with c_left:
@@ -1406,11 +1399,7 @@ def render_tablero_fluido():
             unsafe_allow_html=True,
         )
 
-    # ---------------------------------------------------------
-    # BITÁCORA DIGITAL DE LABORATORIO (CHAT INTERACTIVO Y RESPUESTAS)
-    # ---------------------------------------------------------
     with c_right:
-        # ENCABEZADO CON DESLIZADORES / TOGGLES INTEGRADOS EN LA BITÁCORA
         c_b_head, c_b_t1, c_b_t2 = st.columns([0.44, 0.28, 0.28])
         with c_b_head:
             st.markdown("<h4 style='margin:0 0 1px 0; font-size:13.5px; color:#F3F4F6;'>📌 Bitácora / Chat</h4>", unsafe_allow_html=True)
@@ -1428,7 +1417,6 @@ def render_tablero_fluido():
                 st.session_state.sound_enabled = sound_val
                 st.rerun()
 
-        # FORMULARIO PARA REGISTRAR NUEVO MENSAJE
         with st.expander("💬 Registrar Novedad en Bitácora", expanded=False):
             col_f1, col_f2 = st.columns(2)
             with col_f1:
@@ -1496,10 +1484,8 @@ def render_tablero_fluido():
                 else:
                     st.warning("Escribe un mensaje antes de enviar.")
 
-        # ORDENAR MENSAJES POR PRIORIDAD Y TIEMPO TRANSCURRIDO
         ESTADO_GLOBAL["mensajes_bitacora"].sort(key=obtener_orden_mensaje)
 
-        # RENDERIZADO DEL CHAT/BITÁCORA
         mensajes_lista = ESTADO_GLOBAL.get("mensajes_bitacora", [])
 
         if not mensajes_lista:
@@ -1515,13 +1501,11 @@ def render_tablero_fluido():
                 cycle_sec = diff_sec % 240
                 cycle_num = int(diff_sec // 240)
 
-                # TARJETA VISUAL DEL MENSAJE
                 st.markdown(
                     render_chat_message_html(msg, cycle_sec=cycle_sec, cycle_num=cycle_num),
                     unsafe_allow_html=True
                 )
 
-                # ACCIONES COMPACTAS Y DELGADAS (RECIBIDO / REALIZADO)
                 if msg.get("estado") == "Pendiente":
                     c_ack1, c_ack2, c_del = st.columns([0.48, 0.32, 0.20])
                     with c_ack1:
@@ -1556,7 +1540,6 @@ def render_tablero_fluido():
                             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.rerun()
 
-                # SECCIÓN DE RESPUESTAS HILADAS (SOLO SI SE HABILITÓ AL CREAR LA NOVEDAD)
                 if msg.get("permitir_respuestas", False):
                     mostrar_hilo = msg.get("mostrar_respuestas", False)
                     c_resp_toggle, _ = st.columns([0.40, 0.60])
@@ -1601,9 +1584,6 @@ def render_tablero_fluido():
 
             st.markdown("</div>", unsafe_allow_html=True)
 
-    # ---------------------------------------------------------
-    # BOTÓN / DESPLEGABLE DE ÓRDENES OCULTAS (PARTE TOTALMENTE INFERIOR)
-    # ---------------------------------------------------------
     if not df_ocultas.empty:
         st.markdown("<hr style='border-color: #1F2937; margin: 12px 0 8px 0;'>", unsafe_allow_html=True)
         with st.expander(f"👁️ Desplegar Órdenes Ocultas ({len(df_ocultas)})", expanded=False):
