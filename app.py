@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
 import json
 import os
+import random
 import time
 import urllib.parse
 import numpy as np
@@ -1262,7 +1263,7 @@ def render_tablero_fluido():
             col_target = "# Orden" if "# Orden" in df_vista.columns else df_vista.columns[0]
             df_vista = df_vista[df_vista[col_target].astype(str).str.lower().str.contains(term_search, na=False)]
 
-        filas_por_pagina = 10
+        filas_por_pagina = 12
         total_filas = len(df_vista)
         total_paginas = max(1, (total_filas + filas_por_pagina - 1) // filas_por_pagina)
 
@@ -1273,16 +1274,29 @@ def render_tablero_fluido():
         inicio = p_idx * filas_por_pagina
         fin = min(inicio + filas_por_pagina, total_filas)
         df_pagina = df_vista.iloc[inicio:fin]
-        cant_items_pagina = len(df_pagina)
 
-        duracion_base = 180 if p_idx == 0 else max(15, int(60 * (cant_items_pagina / filas_por_pagina)))
+        if p_idx == 0:
+            duracion_base = 300  # Página 1: 5 minutos
+        elif p_idx == 1:
+            duracion_base = 60   # Página 2: 1 minuto
+        else:
+            duracion_base = 15   # Página 3 en adelante: 15 segundos
+
         duracion_total = duracion_base + st.session_state.get("manual_nav_bonus", 0)
 
         ahora = time.time()
         tiempo_transcurrido = ahora - st.session_state.last_switch_time
 
         if tiempo_transcurrido >= duracion_total and total_paginas > 1:
-            st.session_state.page_index = (st.session_state.page_index + 1) % total_paginas
+            if p_idx == 1 and total_paginas > 2:
+                # Al terminar la página 2, solo un 30% de veces pasa a la página 3 (de vez en cuando)
+                if random.random() < 0.3:
+                    st.session_state.page_index = 2
+                else:
+                    st.session_state.page_index = 0
+            else:
+                st.session_state.page_index = (st.session_state.page_index + 1) % total_paginas
+
             st.session_state.last_switch_time = time.time()
             st.session_state.manual_nav_bonus = 0
             st.rerun()
