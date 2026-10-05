@@ -650,10 +650,8 @@ def render_dark_table(df_page):
         es_correccion = "CORREC" in cer_val
         cer_es_si = cer_val in ["SI", "SÍ"]
         
-        # CORRECCIÓN SOLICITADA:
-        # Atascada SOLO si Cer firmado tiene algún texto, es diferente de SI y no es corrección.
-        # Si está en blanco (""), NO sale atascada.
-        es_atascada = (cer_val != "") and (not cer_es_si) and (not es_correccion)
+        # NUEVA REGLA: Atascado si Cer firmado tiene algo diferente a SI (independiente de otras columnas)
+        es_atascada = (not cer_es_si) and (not es_correccion)
 
         if es_correccion:
             tr_style = 'style="border-bottom: 1px solid #EF4444;" class="row-correccion"'
@@ -678,7 +676,7 @@ def render_dark_table(df_page):
                 badge = '<span style="background-color: rgba(16, 185, 129, 0.2); color: #A7F3D0; border: 1px solid #10B981; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">Si</span>'
             elif val != "":
                 if any(k in val_upper for k in ["CORREC", "ERROR", "RECHAZ", "CANCEL"]):
-                    badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠</span>'
+                    badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠️️</span>'
                 elif h in [col_env, col_crm_salida, col_cer] or any(k in val_upper for k in ["APROBAC", "PENDIENTE", "P.", "FIRMAR", "REVISAR"]):
                     badge = f'<span style="background-color: rgba(245, 158, 11, 0.2); color: #FDE68A; border: 1px solid #F59E0B; padding: 1px 6px; border-radius: 4px; font-weight: 600; font-size: 10.5px;">{val}</span>'
                 else:
@@ -1044,39 +1042,86 @@ def render_tablero_fluido():
                 mapa_cols[col] = "Aprob. Comercial"
             elif ("CRM" in c_upper and "CERT" in c_upper) and "CRM cert." not in mapa_cols.values():
                 mapa_cols[col] = "CRM cert."
-            # Mapea tanto si la columna se llama 'Oculto' como si se llama 'visible' en la hoja de Google Sheets
-            elif ("OCULT" in c_upper or "VISIB" in c_upper) and "Oculto" not in mapa_cols.values():
+            elif "OCULT" in c_upper and "Oculto" not in mapa_cols.values():
                 mapa_cols[col] = "Oculto"
+
+        if "Responsables" not in mapa_cols.values() and len(cols_raw) >= 3:
+            col_pos2 = cols_raw[2]
+            if col_pos2 not in mapa_cols:
+                mapa_cols[col_pos2] = "Responsables"
 
         df_renamed = df_main.rename(columns=mapa_cols)
 
-        col_fecha = "Fecha" if "Fecha" in df_renamed.columns else df_renamed.columns[0]
-        df_renamed["_dt"] = df_renamed[col_fecha].apply(parsear_fecha)
+        if "Fecha" not in df_renamed.columns and len(df_renamed.columns) > 0:
+            df_renamed.rename(columns={df_renamed.columns[0]: "Fecha"}, inplace=True)
 
         cols_existentes = [c for c in cols_deseadas if c in df_renamed.columns]
         df_vista = df_renamed[cols_existentes].copy()
 
-        # MANEJO DE COLUMNA OCULTO / VISIBLE
+        # MANEJO DE COLUMNA OCULTO
         if "Oculto" in df_vista.columns:
-            def _check_oculto(val):
-                v = str(val).strip().upper()
-                if not v or v in ["NAN", "NONE", "NULL"]:
-                    return False
-                if any(k in v for k in ["NO VIS", "OCULT", "TRUE", "1"]):
-                    return True
-                if v == "NO":  # Detecta 'No' o 'No visible'
-                    return True
-                return False
-
-            es_oculta = df_vista["Oculto"].apply(_check_oculto)
-            df_ocultas = df_vista[es_oculta].drop(columns=["Oculto"], errors="ignore").copy()
-            df_vista = df_vista[~es_oculta].drop(columns=["Oculto"], errors="ignore").copy()
+            df_vista["_oculto_val"] = df_vista["Oculto"].astype(str).str.strip().str.upper()
+            es_oculta = df_vista["_oculto_val"].isin(["SI", "SÍ", "TRUE", "OCULTO", "1"])
+            df_ocultas = df_vista[es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
+            df_vista = df_vista[~es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
         else:
             df_ocultas = pd.DataFrame()
 
-        total_reg = len(df_vista)
+        col_ord_main = (
+            "# Orden"
+            if "# Orden" in df_vista.columns
+            else cols_existentes[min(1, len(cols_existentes) - 1)]
+        )
 
-        if not df_vista.empty:
+        if "Fecha" in df_vista.columns:
+            df_vista["Fecha_Raw"] = df_vista["Fecha"].astype(str).str.strip()
+            df_vista["Fecha_Raw"] = df_vista["Fecha_Raw"].replace(
+                ["", "nan", "none", "null", "nat", "NaN", "None", "#ERROR!", "#N/A", "#VALOR!"],
+                np.nan,
+            )
+            df_vista["Fecha_Raw"] = df_vista["Fecha_Raw"].ffill()
+
+        df_vista[col_ord_main] = df_vista[col_ord_main].apply(limpiar_texto)
+        df_vista = df_vista[
+            df_vista[col_ord_main].notna()
+            & (df_vista[col_ord_main] != "")
+            & (~df_vista[col_ord_main].str.lower().isin(["nan", "none", "null", "nat", "#orden"]))
+            & (~df_vista[col_ord_main].str.startswith("#"))
+        ].copy()
+
+        if "Fecha_Raw" in df_vista.columns:
+            df_vista["Fecha_dt"] = df_vista["Fecha_Raw"].apply(parsear_fecha)
+
+            def formatear_fecha_mostrar(row):
+                dt = row["Fecha_dt"]
+                if pd.notna(dt) and dt is not None:
+                    return dt.strftime("%d/%m/%Y")
+                raw = str(row["Fecha_Raw"]).strip()
+                return raw if raw and raw.lower() != "nan" else ""
+
+            df_vista["Fecha"] = df_vista.apply(formatear_fecha_mostrar, axis=1)
+
+            total_reg = len(df_vista)
+            if "Cer firmado" in df_vista.columns:
+                total_firm = (
+                    df_vista["Cer firmado"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .isin(["SI", "SÍ"])
+                    .sum()
+                )
+            if "Enviado" in df_vista.columns:
+                total_env = (
+                    df_vista["Enviado"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .isin(["SI", "SÍ"])
+                    .sum()
+                )
+            total_pend = max(0, total_reg - total_env)
+
             col_cer_check = next((c for c in df_vista.columns if "CER" in c.upper()), None)
             
             for _, r_m in df_vista.iterrows():
@@ -1084,57 +1129,52 @@ def render_tablero_fluido():
                 
                 if "CORREC" in cer_m:
                     cant_correcciones += 1
-                elif cer_m != "" and cer_m not in ["SI", "SÍ"]: # REGLA: Atascado SOLO si tiene texto y es diferente a SI
+                elif cer_m not in ["SI", "SÍ"]: # REGLA: Atascado si cer firmado es diferente a SI
                     cant_atascadas += 1
 
-            # CONTEOS KPI
-            col_cer = next((c for c in df_vista.columns if "CER" in c.upper()), None)
-            col_env = next((c for c in df_vista.columns if "ENV" in c.upper()), None)
+            df_hoy = df_vista[df_vista["Fecha_dt"] == hoy_dt].copy()
 
-            if col_cer:
-                df_vista["_firm"] = df_vista[col_cer].astype(str).str.strip().str.upper().isin(["SI", "SÍ"])
-                total_firm = df_vista["_firm"].sum()
+            df_anteriores = df_vista[df_vista["Fecha_dt"] < hoy_dt].copy()
+            incompletas_list = []
+            for _, r_ant in df_anteriores.iterrows():
+                pct_ant, _ = calcular_progreso_orden(r_ant)
+                if pct_ant < 100:
+                    incompletas_list.append(r_ant)
+            if incompletas_list:
+                df_anteriores_incompletas = pd.DataFrame(incompletas_list)
 
-            if col_env:
-                df_vista["_env"] = df_vista[col_env].astype(str).str.strip().str.upper().isin(["SI", "SÍ"])
-                total_env = df_vista["_env"].sum()
-
-            total_pend = max(0, total_reg - total_env)
-
-            # FILTRADO DE ÓRDENES PARA KPI DE PROGRESO DEL DÍA
-            df_renamed_valid = df_renamed[df_renamed["_dt"].notna()].copy()
-            df_hoy = df_renamed_valid[df_renamed_valid["_dt"] == hoy_dt]
-            df_anteriores_incompletas = df_renamed_valid[df_renamed_valid["_dt"] < hoy_dt]
-
-            if not df_anteriores_incompletas.empty and col_env:
-                df_anteriores_incompletas = df_anteriores_incompletas[
-                    ~df_anteriores_incompletas[col_env].astype(str).str.strip().str.upper().isin(["SI", "SÍ"])
-                ]
+            if df_hoy.empty and not df_vista["Fecha_dt"].dropna().empty:
+                max_dt = df_vista["Fecha_dt"].dropna().max()
+                df_hoy = df_vista[df_vista["Fecha_dt"] == max_dt].copy()
+                fecha_activa_str = max_dt.strftime("%d/%m/%Y")
+            else:
+                fecha_activa_str = hoy_dt.strftime("%d/%m/%Y")
 
             total_hoy = len(df_hoy)
-            fechas_validas = df_renamed_valid["_dt"].tolist()
-            if fechas_validas:
-                fecha_activa_str = max(fechas_validas).strftime("%d/%m/%Y")
 
-    # 1. ENCABEZADO DE KPIS SUPERIORES
-    kcol1, kcol2, kcol3, kcol4, kcol5 = st.columns(5)
-    with kcol1:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-title">TOTAL ÓRDENES</div><div class="kpi-value">{total_reg}</div></div>', unsafe_allow_html=True)
-    with kcol2:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-title">FIRMADOS</div><div class="kpi-value" style="color: #38BDF8;">{total_firm}</div></div>', unsafe_allow_html=True)
-    with kcol3:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-title">ENVIADOS</div><div class="kpi-value" style="color: #10B981;">{total_env}</div></div>', unsafe_allow_html=True)
-    with kcol4:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-title">PENDIENTES</div><div class="kpi-value" style="color: #F59E0B;">{total_pend}</div></div>', unsafe_allow_html=True)
-    with kcol5:
-        st.markdown(f'<div class="kpi-card"><div class="kpi-title">FECHA HOY</div><div class="kpi-value" style="font-size: 16px; padding-top: 4px;">{fecha_activa_str}</div></div>', unsafe_allow_html=True)
+            df_vista = df_vista.sort_values(
+                by=["Fecha_dt", col_ord_main], ascending=[False, True]
+            ).reset_index(drop=True)
 
-    st.markdown("<div style='margin-bottom: 6px;'></div>", unsafe_allow_html=True)
+            df_vista = df_vista.drop(columns=["Fecha_dt", "Fecha_Raw"], errors="ignore")
 
-    # 2. CONTROLES Y BUSCADOR (CON BOTÓN DE OCULTAS INCLUIDO)
-    if (df_vista is not None and not df_vista.empty) or (df_ocultas is not None and not df_ocultas.empty):
-        col_btn1, col_btn2, col_f_todas, col_f_atasc, col_f_correc, col_f_ocult, col_search_box, col_info = st.columns(
-            [0.5, 0.5, 0.85, 1.15, 1.15, 1.0, 2.0, 1.35]
+    # 1. KPIs SUPERIORES
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-title">REGISTRADAS</div><div class="kpi-value">{total_reg}</div></div>', unsafe_allow_html=True)
+    with col2:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-title">FIRMADAS ✏️</div><div class="kpi-value">{total_firm}</div></div>', unsafe_allow_html=True)
+    with col3:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-title">ENVIADAS 📦</div><div class="kpi-value">{total_env}</div></div>', unsafe_allow_html=True)
+    with col4:
+        st.markdown(f'<div class="kpi-card"><div class="kpi-title">PENDIENTES ⌛</div><div class="kpi-value">{total_pend}</div></div>', unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-bottom: 2px;'></div>", unsafe_allow_html=True)
+
+    # 2. CONTROLES Y BUSCADOR
+    if df_vista is not None and not df_vista.empty:
+        col_btn1, col_btn2, col_f_todas, col_f_atasc, col_f_correc, col_search_box, col_info = st.columns(
+            [0.55, 0.55, 0.9, 1.2, 1.2, 2.2, 1.5]
         )
 
         with col_btn1:
@@ -1175,268 +1215,377 @@ def render_tablero_fluido():
                 st.session_state.page_index = 0
                 st.rerun()
 
-        cant_ocultas = len(df_ocultas)
-        with col_f_ocult:
-            lbl_ocult = f"👁️ Ocultas ({cant_ocultas})" if st.session_state.alert_filter != "OCULTAS" else f"▶ 👁️ Ocultas ({cant_ocultas})"
-            if st.button(lbl_ocult, key="btn_f_ocult"):
-                st.session_state.alert_filter = "OCULTAS"
-                st.session_state.search_input = ""
-                st.session_state.page_index = 0
-                st.rerun()
+        with col_search_box:
+            c_in, c_x = st.columns([0.84, 0.16])
+            with c_in:
+                st.text_input(
+                    "Buscar Orden",
+                    key="search_input",
+                    placeholder="🔍 Buscar N° Orden...",
+                    label_visibility="collapsed",
+                )
+            with c_x:
+                if st.session_state.get("search_input", "").strip():
+                    st.button("❌", on_click=borrar_busqueda, key="btn_x_clear", help="Limpiar búsqueda")
 
-        # FILTRADO SEGÚN EL BOTÓN SELECCIONADO
         col_cer_f = next((c for c in df_vista.columns if "CER" in c.upper()), None)
 
-        if st.session_state.alert_filter == "OCULTAS":
-            df_vista = df_ocultas.copy()
-        elif st.session_state.alert_filter == "ATASCADAS" and col_cer_f:
-            cer_s = df_vista[col_cer_f].astype(str).str.strip().str.upper()
+        if st.session_state.alert_filter == "ATASCADAS" and col_cer_f:
             df_vista = df_vista[
-                (cer_s != "")
-                & (~cer_s.isin(["SI", "SÍ"]))
-                & (~cer_s.str.contains("CORREC", na=False))
+                (~df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"]))
+                & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
             ]
         elif st.session_state.alert_filter == "CORRECCION" and col_cer_f:
             df_vista = df_vista[df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False)]
-
-        # BÚSQUEDA RÁPIDA POR # ORDEN O CUALQUIER TEXTO
-        with col_search_box:
-            st.text_input(
-                label="Buscar",
-                key="search_input",
-                placeholder="🔍 Buscar # Orden, responsable...",
-                label_visibility="collapsed",
-            )
 
         term_search = st.session_state.get("search_input", "").strip().lower()
         if term_search:
             col_target = "# Orden" if "# Orden" in df_vista.columns else df_vista.columns[0]
             df_vista = df_vista[df_vista[col_target].astype(str).str.lower().str.contains(term_search, na=False)]
 
-        # CÁLCULO DE PAGINACIÓN AUTOMÁTICA
-        PAGE_SIZE = 12
-        total_items = len(df_vista)
-        total_pages = max(1, (total_items + PAGE_SIZE - 1) // PAGE_SIZE)
+        filas_por_pagina = 10
+        total_filas = len(df_vista)
+        total_paginas = max(1, (total_filas + filas_por_pagina - 1) // filas_por_pagina)
 
-        # ROTACIÓN AUTOMÁTICA DE PÁGINAS
-        now = time.time()
-        time_limit = 15 + st.session_state.manual_nav_bonus
-        if now - st.session_state.last_switch_time > time_limit:
-            st.session_state.page_index = (st.session_state.page_index + 1) % total_pages
-            st.session_state.last_switch_time = now
+        if st.session_state.page_index >= total_paginas:
+            st.session_state.page_index = 0
+
+        p_idx = st.session_state.page_index
+        inicio = p_idx * filas_por_pagina
+        fin = min(inicio + filas_por_pagina, total_filas)
+        df_pagina = df_vista.iloc[inicio:fin]
+        cant_items_pagina = len(df_pagina)
+
+        duracion_base = 180 if p_idx == 0 else max(15, int(60 * (cant_items_pagina / filas_por_pagina)))
+        duracion_total = duracion_base + st.session_state.get("manual_nav_bonus", 0)
+
+        ahora = time.time()
+        tiempo_transcurrido = ahora - st.session_state.last_switch_time
+
+        if tiempo_transcurrido >= duracion_total and total_paginas > 1:
+            st.session_state.page_index = (st.session_state.page_index + 1) % total_paginas
+            st.session_state.last_switch_time = time.time()
             st.session_state.manual_nav_bonus = 0
             st.rerun()
 
-        if st.session_state.page_index >= total_pages:
-            st.session_state.page_index = 0
-
-        cur_page = st.session_state.page_index + 1
-        start_idx = st.session_state.page_index * PAGE_SIZE
-        end_idx = start_idx + PAGE_SIZE
-        df_pagina = df_vista.iloc[start_idx:end_idx]
-
         with col_info:
-            filtro_txt = f" [{st.session_state.alert_filter}]" if st.session_state.alert_filter != "TODAS" else ""
+            segundos_restantes = max(0, int(duracion_total - tiempo_transcurrido))
+            bonus_str = " (+30s)" if st.session_state.get("manual_nav_bonus", 0) > 0 else ""
+            f_active = f" | {st.session_state.alert_filter}" if st.session_state.alert_filter != "TODAS" else ""
+            st.caption(
+                f"Pág. {p_idx + 1}/{total_paginas} ({total_filas} reg.){f_active}"
+                f" | ⏱️ {segundos_restantes}s{bonus_str}"
+            )
+
+        st.markdown(render_dark_table(df_pagina), unsafe_allow_html=True)
+
+        if total_paginas > 1:
+            num_btns = min(total_paginas, 12)
+            col_widths = [0.04] * num_btns + [1.0 - (0.04 * num_btns)]
+            btn_cols = st.columns(col_widths)
+            for i in range(num_btns):
+                with btn_cols[i]:
+                    label = f"• {i+1} •" if i == st.session_state.page_index else f"{i+1}"
+                    if st.button(label, key=f"num_page_btn_{i}"):
+                        st.session_state.page_index = i
+                        st.session_state.last_switch_time = time.time()
+                        st.session_state.manual_nav_bonus = 30
+                        st.rerun()
+
+    else:
+        st.error(f"⚠️ {info_estado}")
+
+    st.markdown("<hr style='border-color: #1F2937; margin: 3px 0;'>", unsafe_allow_html=True)
+
+    # 3. SECCIÓN INFERIOR
+    c_left, c_middle, c_right = st.columns([1.2, 1.1, 1.2])
+
+    with c_left:
+        has_anteriores_inc = not df_anteriores_incompletas.empty
+        now_p = time.time()
+        dt_p = now_p - st.session_state.prog_day_last_switch
+
+        if has_anteriores_inc:
+            if st.session_state.prog_day_page == 0 and dt_p >= 20:
+                st.session_state.prog_day_page = 1
+                st.session_state.prog_day_last_switch = now_p
+            elif st.session_state.prog_day_page == 1 and dt_p >= 5:
+                st.session_state.prog_day_page = 0
+                st.session_state.prog_day_last_switch = now_p
+
+        if st.session_state.prog_day_page == 1 and has_anteriores_inc:
+            df_prog_render = df_anteriores_incompletas
+            sub_caption = f"⚠️ **Pág 2/2:** Incompletas Anteriores (Vista 5s)"
+        else:
+            st.session_state.prog_day_page = 0
+            df_prog_render = df_hoy
+            sub_caption = f"🗓️ **Pág 1/2:** Hoy ({fecha_activa_str}) | {total_hoy} órdenes"
+
+        st.markdown("<h4 style='margin:0 0 1px 0; font-size:13.5px; color:#F3F4F6;'>🚚 Programados del Día</h4>", unsafe_allow_html=True)
+        st.caption(sub_caption)
+        
+        progresos = []
+        if df_prog_render is not None and not df_prog_render.empty:
+            for _, r in df_prog_render.iterrows():
+                ord_num = limpiar_texto(r.get('# Orden', ''))
+                if ord_num:
+                    pct, txt_falta = calcular_progreso_orden(r)
+                    progresos.append((ord_num, pct, txt_falta))
+
+        if progresos:
+            acumulado_general = int(np.mean([p[1] for p in progresos]))
+            
             st.markdown(
-                f"<div style='text-align: right; color: #9CA3AF; font-size: 11px; font-weight: 700; padding-top: 5px;'>"
-                f"PÁG {cur_page}/{total_pages}{filtro_txt} | ITEMS {start_idx+1}-{min(end_idx, total_items)} DE {total_items}</div>",
+                f'<div style="background-color: #111827; border: 1px solid #1F2937; border-radius: 4px; padding: 3px 6px; margin-bottom: 3px;">'
+                f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1px;">'
+                f'<span style="font-size: 10px; font-weight: 700; color: #9CA3AF;">PROMEDIO VISTA</span>'
+                f'<span style="font-size: 11.5px; font-weight: 800; color: #38BDF8;">{acumulado_general}%</span>'
+                f'</div>'
+                f'<div style="background-color: #1F2937; border-radius: 3px; height: 5px; width: 100%; overflow: hidden;">'
+                f'<div style="background: linear-gradient(90deg, #3B82F6, #10B981); height: 100%; width: {acumulado_general}%;"></div>'
+                f'</div>'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
-        # RENDER TABLA
-        st.markdown(render_dark_table(df_pagina), unsafe_allow_html=True)
+            html_progresos = '<div style="display: flex; flex-direction: column; gap: 2px;">'
+            for ord_num, pct, txt_falta in progresos:
+                bar_color = "#10B981" if pct == 100 else ("#3B82F6" if pct >= 50 else "#F59E0B")
+                html_progresos += (
+                    f'<div class="progress-order-card">'
+                    f'<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1px;">'
+                    f'<span style="font-size: 11px; font-weight: 700; color: #F3F4F6;">📦 Orden #{ord_num}</span>'
+                    f'<span style="font-size: 10.5px; font-weight: 800; color: {bar_color};">{pct}%</span>'
+                    f'</div>'
+                    f'<div style="background-color: #1F2937; border-radius: 3px; height: 4px; width: 100%; overflow: hidden; margin-bottom: 1px;">'
+                    f'<div style="background-color: {bar_color}; height: 100%; width: {pct}%;"></div>'
+                    f'</div>'
+                    f'<div style="font-size: 9px; color: #9CA3AF; font-weight: 600;">{txt_falta}</div>'
+                    f'</div>'
+                )
+            html_progresos += '</div>'
+            st.markdown(html_progresos, unsafe_allow_html=True)
+        else:
+            st.info("Sin órdenes en esta vista.")
 
-    else:
-        st.warning("⚠️ No se encontraron datos en la hoja de proceso.")
+    with c_middle:
+        st.markdown("<h4 style='margin:0 0 1px 0; font-size:13.5px; color:#F3F4F6;'>📋 Asignaciones del Día</h4>", unsafe_allow_html=True)
+        st.caption("Tareas y responsabilidades diarias")
+        
+        st.markdown(
+            '<div style="background-color: #111827; border: 1px dashed #374151; border-radius: 5px; padding: 12px 10px; text-align: center; color: #9CA3AF; margin-top: 2px;">'
+            '<div style="font-size: 18px; margin-bottom: 2px;">📋</div>'
+            '<div style="font-size: 12px; font-weight: 600; color: #D1D5DB;">Sin asignaciones pendientes</div>'
+            '<div style="font-size: 10.5px; margin-top: 1px; color: #6B7280;">Espacio listo para próxima integración</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 
-    # EXPANDER INFERIOR PARA ÓRDENES OCULTAS (SI SE ESTÁ EN OTRA VISTA)
-    if st.session_state.alert_filter != "OCULTAS" and not df_ocultas.empty:
+    # ---------------------------------------------------------
+    # BITÁCORA DIGITAL DE LABORATORIO (CHAT INTERACTIVO Y RESPUESTAS)
+    # ---------------------------------------------------------
+    with c_right:
+        # ENCABEZADO CON DESLIZADORES / TOGGLES INTEGRADOS EN LA BITÁCORA
+        c_b_head, c_b_t1, c_b_t2 = st.columns([0.44, 0.28, 0.28])
+        with c_b_head:
+            st.markdown("<h4 style='margin:0 0 1px 0; font-size:13.5px; color:#F3F4F6;'>📌 Bitácora / Chat</h4>", unsafe_allow_html=True)
+            st.caption("Novedades Operativas")
+        with c_b_t1:
+            notif_val = st.toggle("🔔 Notif.", value=st.session_state.get("notif_enabled", True), key="toggle_notif_bit")
+            if notif_val != st.session_state.get("notif_enabled", True):
+                st.session_state.notif_enabled = notif_val
+                if notif_val:
+                    solicitar_permisos_notificaciones_js()
+                st.rerun()
+        with c_b_t2:
+            sound_val = st.toggle("🔊 Sonido", value=st.session_state.get("sound_enabled", True), key="toggle_sound_bit")
+            if sound_val != st.session_state.get("sound_enabled", True):
+                st.session_state.sound_enabled = sound_val
+                st.rerun()
+
+        # FORMULARIO PARA REGISTRAR NUEVO MENSAJE
+        with st.expander("💬 Registrar Novedad en Bitácora", expanded=False):
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                idx_emisor_local = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
+                emisor_sel = st.selectbox(
+                    "De (Emisor):",
+                    options=LISTA_EMISORES,
+                    index=idx_emisor_local,
+                    key="bit_emisor_sel"
+                )
+                if emisor_sel != st.session_state.emisor_local:
+                    st.session_state.emisor_local = emisor_sel
+
+            with col_f2:
+                receptor_sel = st.selectbox(
+                    "Para (Receptor):",
+                    options=LISTA_RECEPTORES,
+                    index=0,
+                    key="bit_receptor_sel"
+                )
+
+            prioridad_sel = st.selectbox(
+                "Prioridad:",
+                options=["Normal", "Auditoría", "Urgente"],
+                index=0,
+                key="bit_prioridad_sel"
+            )
+
+            contenido_input = st.text_area(
+                "Novedad / Mensaje:",
+                placeholder="Escribe el mensaje o indicación...",
+                height=65,
+                key="bit_contenido_input"
+            )
+
+            permitir_resp_sel = st.checkbox(
+                "💬 Habilitar opción de respuestas / hilo de conversación",
+                value=False,
+                key="bit_permitir_resp_input"
+            )
+
+            if st.button("🚀 Publicar Novedad", key="btn_publicar_bitacora"):
+                if contenido_input.strip():
+                    now_ts_pub = time.time()
+                    nuevo_msg = {
+                        "id": f"msg_{int(now_ts_pub * 1000)}",
+                        "emisor": emisor_sel,
+                        "receptor": receptor_sel,
+                        "prioridad": prioridad_sel,
+                        "contenido": contenido_input.strip(),
+                        "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M:%S"),
+                        "timestamp": now_ts_pub,
+                        "estado": "Pendiente",
+                        "usuario_enterado": None,
+                        "fecha_enterado": None,
+                        "permitir_respuestas": permitir_resp_sel,
+                        "mostrar_respuestas": False,
+                        "respuestas": []
+                    }
+                    ESTADO_GLOBAL["mensajes_bitacora"].insert(0, nuevo_msg)
+                    guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
+                    st.session_state.emisor_local = emisor_sel
+                    st.success("✅ Novedad registrada.")
+                    st.rerun()
+                else:
+                    st.warning("Escribe un mensaje antes de enviar.")
+
+        # ORDENAR MENSAJES POR PRIORIDAD Y TIEMPO TRANSCURRIDO
+        ESTADO_GLOBAL["mensajes_bitacora"].sort(key=obtener_orden_mensaje)
+
+        # RENDERIZADO DEL CHAT/BITÁCORA
+        mensajes_lista = ESTADO_GLOBAL.get("mensajes_bitacora", [])
+
+        if not mensajes_lista:
+            st.info("No hay novedades registradas en la bitácora.")
+        else:
+            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+            now_ts_curr = time.time()
+
+            for idx_m, msg in enumerate(mensajes_lista):
+                t_creacion = msg.get("timestamp", now_ts_curr)
+                diff_sec = now_ts_curr - t_creacion
+                
+                cycle_sec = diff_sec % 240
+                cycle_num = int(diff_sec // 240)
+
+                # TARJETA VISUAL DEL MENSAJE
+                st.markdown(
+                    render_chat_message_html(msg, cycle_sec=cycle_sec, cycle_num=cycle_num),
+                    unsafe_allow_html=True
+                )
+
+                # ACCIONES COMPACTAS Y DELGADAS (RECIBIDO / REALIZADO)
+                if msg.get("estado") == "Pendiente":
+                    c_ack1, c_ack2, c_del = st.columns([0.48, 0.32, 0.20])
+                    with c_ack1:
+                        idx_ack_local = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
+                        usr_confirm = st.selectbox(
+                            "Confirmar",
+                            options=LISTA_EMISORES,
+                            index=idx_ack_local,
+                            key=f"sel_ack_usr_{msg['id']}_{idx_m}",
+                            label_visibility="collapsed"
+                        )
+                    with c_ack2:
+                        lbl_action = "✅ Realizado" if msg.get("prioridad") != "Urgente" else "✅ Enterado"
+                        if st.button(lbl_action, key=f"btn_enterado_{msg['id']}_{idx_m}"):
+                            msg["estado"] = "Atendido"
+                            msg["usuario_enterado"] = usr_confirm
+                            msg["fecha_enterado"] = datetime.now(COT).strftime("%d/%m/%Y %H:%M:%S")
+                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
+                            st.session_state.emisor_local = usr_confirm
+                            st.rerun()
+                    with c_del:
+                        if st.button("🗑️ Borrar", key=f"btn_del_urg_{msg['id']}_{idx_m}"):
+                            ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m["id"] != msg["id"]]
+                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
+                            st.rerun()
+
+                else:
+                    c_del_at, _ = st.columns([0.30, 0.70])
+                    with c_del_at:
+                        if st.button("🗑️ Eliminar", key=f"btn_del_atend_{msg['id']}_{idx_m}"):
+                            ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m["id"] != msg["id"]]
+                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
+                            st.rerun()
+
+                # SECCIÓN DE RESPUESTAS HILADAS (SOLO SI SE HABILITÓ AL CREAR LA NOVEDAD)
+                if msg.get("permitir_respuestas", False):
+                    mostrar_hilo = msg.get("mostrar_respuestas", False)
+                    c_resp_toggle, _ = st.columns([0.40, 0.60])
+                    with c_resp_toggle:
+                        lbl_r_toggle = "💬 Ocultar hilo" if mostrar_hilo else "💬 Responder"
+                        if st.button(lbl_r_toggle, key=f"btn_tgl_resp_{msg['id']}_{idx_m}"):
+                            msg["mostrar_respuestas"] = not mostrar_hilo
+                            st.rerun()
+
+                    if msg.get("mostrar_respuestas", False):
+                        with st.container():
+                            st.markdown("<div style='margin-left: 10px; border-left: 2px solid #374151; padding-left: 8px;'>", unsafe_allow_html=True)
+                            c_r1, c_r2 = st.columns([0.45, 0.55])
+                            with c_r1:
+                                idx_resp_local = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
+                                usr_resp = st.selectbox(
+                                    "Responde:",
+                                    options=LISTA_EMISORES,
+                                    index=idx_resp_local,
+                                    key=f"sel_usr_resp_{msg['id']}_{idx_m}"
+                                )
+                            with c_r2:
+                                txt_resp = st.text_input(
+                                    "Mensaje de respuesta:",
+                                    placeholder="Escribe tu respuesta...",
+                                    key=f"in_txt_resp_{msg['id']}_{idx_m}",
+                                    label_visibility="collapsed"
+                                )
+                            if st.button("Enviado 💬", key=f"btn_send_resp_{msg['id']}_{idx_m}"):
+                                if txt_resp.strip():
+                                    msg["respuestas"].append({
+                                        "usuario": usr_resp,
+                                        "texto": txt_resp.strip(),
+                                        "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M")
+                                    })
+                                    guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
+                                    st.session_state.emisor_local = usr_resp
+                                    st.rerun()
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                st.markdown("<div style='margin-bottom: 6px;'></div>", unsafe_allow_html=True)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------------------------------------------------------
+    # BOTÓN / DESPLEGABLE DE ÓRDENES OCULTAS (PARTE TOTALMENTE INFERIOR)
+    # ---------------------------------------------------------
+    if not df_ocultas.empty:
         st.markdown("<hr style='border-color: #1F2937; margin: 12px 0 8px 0;'>", unsafe_allow_html=True)
         with st.expander(f"👁️ Desplegar Órdenes Ocultas ({len(df_ocultas)})", expanded=False):
             st.markdown(render_dark_table(df_ocultas), unsafe_allow_html=True)
 
-    # 3. SECCIÓN INFERIOR: SEGUIMIENTO DE HOY + NOVEDADES / BITÁCORA EN PARALELO
-    st.markdown("<hr style='border-color: #1F2937; margin: 8px 0;'>", unsafe_allow_html=True)
-    col_progreso, col_bitacora = st.columns([1.1, 1.0])
-
-    # COLUMNA IZQUIERDA: PROGRESO Y SEGUIMIENTO DE ETAPAS
-    with col_progreso:
-        st.markdown(
-            f'<div style="font-weight: 800; font-size: 13px; color: #38BDF8; margin-bottom: 6px;">'
-            f'📌 AVANCE DE HOY Y PENDIENTES ({total_hoy} de hoy | {len(df_anteriores_incompletas)} anteriores)</div>',
-            unsafe_allow_html=True,
-        )
-
-        df_comb = pd.concat([df_hoy, df_anteriores_incompletas], ignore_index=True)
-        if not df_comb.empty:
-            PROG_PAGE_SIZE = 4
-            tot_prog_items = len(df_comb)
-            tot_prog_pages = max(1, (tot_prog_items + PROG_PAGE_SIZE - 1) // PROG_PAGE_SIZE)
-
-            if now - st.session_state.prog_day_last_switch > 12:
-                st.session_state.prog_day_page = (st.session_state.prog_day_page + 1) % tot_prog_pages
-                st.session_state.prog_day_last_switch = now
-
-            if st.session_state.prog_day_page >= tot_prog_pages:
-                st.session_state.prog_day_page = 0
-
-            p_start = st.session_state.prog_day_page * PROG_PAGE_SIZE
-            p_end = p_start + PROG_PAGE_SIZE
-            df_prog_pag = df_comb.iloc[p_start:p_end]
-
-            for _, r_p in df_prog_pag.iterrows():
-                ord_p = limpiar_texto(r_p.get("# Orden", r_p.get("ORDEN", "N/A")))
-                resp_p = limpiar_texto(r_p.get("Responsables", r_p.get("RESPONSABLE", "")))
-                pct, falta_txt = calcular_progreso_orden(r_p)
-
-                bar_color = "#10B981" if pct == 100 else "#3B82F6" if pct >= 50 else "#F59E0B"
-
-                st.markdown(
-                    f'''
-                    <div class="progress-order-card">
-                        <div style="display: flex; justify-content: space-between; font-weight: 700; font-size: 11.5px; margin-bottom: 2px;">
-                            <span>Orden #{ord_p} <span style="color: #9CA3AF; font-weight: 400;">({resp_p})</span></span>
-                            <span style="color: {bar_color};">{pct}%</span>
-                        </div>
-                        <div style="background-color: #1F2937; border-radius: 3px; height: 5px; width: 100%; margin-bottom: 2px; overflow: hidden;">
-                            <div style="background-color: {bar_color}; width: {pct}%; height: 100%;"></div>
-                        </div>
-                        <div style="font-size: 10px; color: #9CA3AF;">{falta_txt}</div>
-                    </div>
-                    ''',
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.info("Sin órdenes en progreso registradas para el día de hoy.")
-
-    # COLUMNA DERECHA: NOVEDADES Y BITÁCORA INTERACTIVA MULTIUSUARIO
-    with col_bitacora:
-        st.markdown(
-            '<div style="font-weight: 800; font-size: 13px; color: #10B981; margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">'
-            '<span>💬 BITÁCORA Y NOVEDADES EN VIVO</span>'
-            '<span style="font-size: 10px; color: #9CA3AF; font-weight: 500;">Sincronizado entre PCs</span></div>',
-            unsafe_allow_html=True,
-        )
-
-        # CONFIGURACIÓN RÁPIDA DE EMISOR Y PERMISOS DE NOTIFICACIÓN
-        c_emis, c_notif = st.columns([1.6, 1.0])
-        with c_emis:
-            idx_actual = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
-            emisor_sel = st.selectbox(
-                "Mi usuario:",
-                LISTA_EMISORES,
-                index=idx_actual,
-                key="sb_emisor_local",
-                label_visibility="collapsed"
-            )
-            st.session_state.emisor_local = emisor_sel
-
-        with c_notif:
-            if st.button("🔔 Activar Sonido/Notif", key="btn_permisos_notif"):
-                solicitar_permisos_notificaciones_js()
-
-        # FORMULARIO PARA REGISTRAR NUEVA NOVEDAD
-        with st.form(key="form_nueva_novedad", clear_on_submit=True):
-            col_rec, col_prio = st.columns([1.2, 1.0])
-            with col_rec:
-                receptor_input = st.selectbox("Dirigido a:", LISTA_RECEPTORES, index=0)
-            with col_prio:
-                prioridad_input = st.selectbox("Prioridad:", ["Normal", "Auditoría", "Urgente"], index=0)
-
-            texto_novedad = st.text_area("Mensaje de Novedad:", placeholder="Escribe la novedad o aviso urgente aquí...", height=55)
-            btn_enviar = st.form_submit_button("🚀 PUBLICAR EN BITÁCORA")
-
-            if btn_enviar and texto_novedad.strip():
-                now_dt = datetime.now(COT)
-                nuevo_msg = {
-                    "id": f"msg_{int(time.time()*1000)}",
-                    "emisor": st.session_state.emisor_local,
-                    "receptor": receptor_input,
-                    "prioridad": prioridad_input,
-                    "contenido": texto_novedad.strip(),
-                    "fecha_hora": now_dt.strftime("%d/%m/%Y %H:%M"),
-                    "timestamp": time.time(),
-                    "estado": "Pendiente",
-                    "usuario_enterado": None,
-                    "fecha_enterado": None,
-                    "permitir_respuestas": False,
-                    "mostrar_respuestas": False,
-                    "respuestas": []
-                }
-                ESTADO_GLOBAL["mensajes_bitacora"].insert(0, nuevo_msg)
-                guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                st.success("✅ Novedad publicada correctamente.")
-                st.rerun()
-
-        # RENDER Y ACCIONES SOBRE LISTA DE NOVEDADES
-        mensajes_actuales = ESTADO_GLOBAL.get("mensajes_bitacora", [])
-        if mensajes_actuales:
-            mensajes_ordenados = sorted(mensajes_actuales, key=obtener_orden_mensaje)
-
-            st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-            for m in mensajes_ordenados:
-                m_id = m.get("id")
-                prio = m.get("prioridad")
-                est = m.get("estado")
-                
-                now_t = time.time()
-                ts_orig = m.get("timestamp", now_t)
-                elapsed = max(0, now_t - ts_orig)
-                cycle_sec = elapsed % 240
-                cycle_num = int(elapsed // 240)
-
-                st.markdown(render_chat_message_html(m, cycle_sec=cycle_sec, cycle_num=cycle_num), unsafe_allow_html=True)
-
-                c_act1, c_act2, c_act3 = st.columns([1.2, 1.1, 1.1])
-                
-                with c_act1:
-                    if est == "Pendiente":
-                        if st.button("✅ Marcar Realizado", key=f"btn_enterado_{m_id}"):
-                            m["estado"] = "Atendido"
-                            m["usuario_enterado"] = st.session_state.emisor_local
-                            m["fecha_enterado"] = datetime.now(COT).strftime("%d/%m/%Y %H:%M")
-                            guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                            st.rerun()
-
-                with c_act2:
-                    val_resp = m.get("permitir_respuestas", False)
-                    txt_btn_resp = "💬 Responder" if not val_resp else "✖️ Cancelar"
-                    if st.button(txt_btn_resp, key=f"btn_toggle_resp_{m_id}"):
-                        m["permitir_respuestas"] = not val_resp
-                        st.rerun()
-
-                with c_act3:
-                    if st.button("🗑️ Borrar", key=f"btn_del_{m_id}"):
-                        ESTADO_GLOBAL["mensajes_bitacora"] = [x for x in ESTADO_GLOBAL["mensajes_bitacora"] if x.get("id") != m_id]
-                        guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                        st.rerun()
-
-                # CAJA EXPANDIBLE PARA ESCRIBIR RESPUESTAS HILADAS
-                if m.get("permitir_respuestas", False):
-                    with st.form(key=f"form_resp_{m_id}"):
-                        txt_reply = st.text_input("Respuesta:", placeholder="Escribe tu respuesta...", key=f"in_resp_{m_id}")
-                        if st.form_submit_button("Enviar Respuesta"):
-                            if txt_reply.strip():
-                                if "respuestas" not in m:
-                                    m["respuestas"] = []
-                                m["respuestas"].append({
-                                    "usuario": st.session_state.emisor_local,
-                                    "texto": txt_reply.strip(),
-                                    "fecha_hora": datetime.now(COT).strftime("%d/%m %H:%M")
-                                })
-                                m["permitir_respuestas"] = False
-                                guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                                st.rerun()
-
-                st.markdown("<div style='margin-bottom: 6px;'></div>", unsafe_allow_html=True)
-
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            st.info("No hay novedades registradas en la bitácora actualmente.")
-
 
 # ---------------------------------------------------------
-# EJECUCIÓN PRINCIPAL DE LA APLICACIÓN
+# EJECUCIÓN PRINCIPAL
 # ---------------------------------------------------------
-if __name__ == "__main__":
-    render_tablero_fluido()
+render_tablero_fluido()
