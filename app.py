@@ -393,7 +393,7 @@ def solicitar_permisos_notificaciones_js():
                     if (perm === "granted") {
                         alert("✅ Notificaciones del sistema y sonido activados correctamente.");
                     } else {
-                        alert("⚠️ Debes permitir las notificaciones en el navegador para recibir las alertas flotantes.");
+                        alert("⚠️️ Debes permitir las notificaciones en el navegador para recibir las alertas flotantes.");
                     }
                 });
             }
@@ -627,7 +627,7 @@ def render_dark_table(df_page):
         return "<div style='color: #9CA3AF; text-align: center; padding: 10px; font-size: 13px;'>Sin datos o registros coincidentes.</div>"
 
     # Filtrar cualquier columna oculta para que no aparezca en la cabecera visual
-    headers = [c for c in list(df_page.columns) if "OCULT" not in str(c).upper()]
+    headers = [c for c in list(df_page.columns) if "OCULT" not in str(c).upper() and "VISIBL" not in str(c).upper()]
 
     col_resp = next((c for c in headers if "RESP" in c.upper()), None)
     col_cer = next((c for c in headers if "CER" in c.upper() and "FIRM" in c.upper()), None)
@@ -650,8 +650,8 @@ def render_dark_table(df_page):
         es_correccion = "CORREC" in cer_val
         cer_es_si = cer_val in ["SI", "SÍ"]
         
-        # NUEVA REGLA: Atascado si Cer firmado tiene algo diferente a SI (independiente de otras columnas)
-        es_atascada = (not cer_es_si) and (not es_correccion)
+        # REGLA ACTUALIZADA: Atascado solo si Cer firmado tiene algo DIFERENTE de SI y NO está en blanco
+        es_atascada = (not cer_es_si) and (not es_correccion) and (cer_val != "")
 
         if es_correccion:
             tr_style = 'style="border-bottom: 1px solid #EF4444;" class="row-correccion"'
@@ -676,7 +676,7 @@ def render_dark_table(df_page):
                 badge = '<span style="background-color: rgba(16, 185, 129, 0.2); color: #A7F3D0; border: 1px solid #10B981; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">Si</span>'
             elif val != "":
                 if any(k in val_upper for k in ["CORREC", "ERROR", "RECHAZ", "CANCEL"]):
-                    badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠️️</span>'
+                    badge = f'<span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 10.5px;">{val} ⚠</span>'
                 elif h in [col_env, col_crm_salida, col_cer] or any(k in val_upper for k in ["APROBAC", "PENDIENTE", "P.", "FIRMAR", "REVISAR"]):
                     badge = f'<span style="background-color: rgba(245, 158, 11, 0.2); color: #FDE68A; border: 1px solid #F59E0B; padding: 1px 6px; border-radius: 4px; font-weight: 600; font-size: 10.5px;">{val}</span>'
                 else:
@@ -1042,7 +1042,7 @@ def render_tablero_fluido():
                 mapa_cols[col] = "Aprob. Comercial"
             elif ("CRM" in c_upper and "CERT" in c_upper) and "CRM cert." not in mapa_cols.values():
                 mapa_cols[col] = "CRM cert."
-            elif "OCULT" in c_upper and "Oculto" not in mapa_cols.values():
+            elif ("OCULT" in c_upper or "VISIBL" in c_upper) and "Oculto" not in mapa_cols.values():
                 mapa_cols[col] = "Oculto"
 
         if "Responsables" not in mapa_cols.values() and len(cols_raw) >= 3:
@@ -1058,10 +1058,14 @@ def render_tablero_fluido():
         cols_existentes = [c for c in cols_deseadas if c in df_renamed.columns]
         df_vista = df_renamed[cols_existentes].copy()
 
-        # MANEJO DE COLUMNA OCULTO
+        # MANEJO DE COLUMNA OCULTO / VISIBLE
         if "Oculto" in df_vista.columns:
             df_vista["_oculto_val"] = df_vista["Oculto"].astype(str).str.strip().str.upper()
-            es_oculta = df_vista["_oculto_val"].isin(["SI", "SÍ", "TRUE", "OCULTO", "1"])
+            es_oculta = (
+                df_vista["_oculto_val"].isin(["SI", "SÍ", "TRUE", "OCULTO", "1"])
+                | df_vista["_oculto_val"].str.contains("NO", na=False)
+                | df_vista["_oculto_val"].str.contains("FALSE", na=False)
+            )
             df_ocultas = df_vista[es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
             df_vista = df_vista[~es_oculta].drop(columns=["Oculto", "_oculto_val"], errors="ignore").copy()
         else:
@@ -1125,11 +1129,11 @@ def render_tablero_fluido():
             col_cer_check = next((c for c in df_vista.columns if "CER" in c.upper()), None)
             
             for _, r_m in df_vista.iterrows():
-                cer_m = str(r_m[col_cer_check]).strip().upper() if col_cer_check else ""
+                cer_m = str(r_m[col_cer_check]).strip().upper() if col_cer_check and pd.notna(r_m[col_cer_check]) else ""
                 
                 if "CORREC" in cer_m:
                     cant_correcciones += 1
-                elif cer_m not in ["SI", "SÍ"]: # REGLA: Atascado si cer firmado es diferente a SI
+                elif cer_m != "" and cer_m not in ["SI", "SÍ"]: # REGLA: Atascado si cer firmado no está en blanco y es diferente de SI
                     cant_atascadas += 1
 
             df_hoy = df_vista[df_vista["Fecha_dt"] == hoy_dt].copy()
@@ -1232,7 +1236,8 @@ def render_tablero_fluido():
 
         if st.session_state.alert_filter == "ATASCADAS" and col_cer_f:
             df_vista = df_vista[
-                (~df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"]))
+                (df_vista[col_cer_f].astype(str).str.strip() != "")
+                & (~df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"]))
                 & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
             ]
         elif st.session_state.alert_filter == "CORRECCION" and col_cer_f:
