@@ -646,13 +646,15 @@ def render_dark_table(df_page):
 
     for idx, row in df_page.iterrows():
         cer_val = str(row[col_cer]).strip().upper() if col_cer and pd.notna(row[col_cer]) else ""
+        env_val = str(row[col_env]).strip().upper() if col_env and pd.notna(row[col_env]) else ""
 
         es_correccion = "CORREC" in cer_val
         es_revisado = "REVISADO" in cer_val
         cer_es_si = cer_val in ["SI", "SÍ"]
-        
-        # Atascado solo si Cer firmado tiene algo DIFERENTE de SI, no es corrección, no es revisado y NO está en blanco
-        es_atascada = (not cer_es_si) and (not es_correccion) and (not es_revisado) and (cer_val != "")
+        env_es_si = env_val in ["SI", "SÍ"]
+
+        # Atascado cuando Cer firmado es SI pero Enviado NO es SI (y no es corrección ni revisado)
+        es_atascada = cer_es_si and (not env_es_si) and (not es_correccion) and (not es_revisado)
 
         if es_correccion:
             tr_style = 'style="border-bottom: 1px solid #EF4444;" class="row-correccion"'
@@ -674,7 +676,7 @@ def render_dark_table(df_page):
                 td_style = "padding: 4px 4px; text-align: center; width: 75px; white-space: nowrap;"
                 badge = f'<span style="color: #38BDF8; font-weight: 700; font-size: 11.5px;">{val}</span>'
             elif h == col_orden and es_atascada:
-                badge = f'{val} <span style="background-color: rgba(245, 158, 11, 0.25); color: #FBBF24; border: 1px solid #F59E0B; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Certificado pendiente de firma">⚠️ Atascada</span>'
+                badge = f'{val} <span style="background-color: rgba(245, 158, 11, 0.25); color: #FBBF24; border: 1px solid #F59E0B; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Certificado firmado pendiente de envío">⚠️ Atascada</span>'
             elif h == col_orden and es_correccion:
                 badge = f'{val} <span style="background-color: rgba(239, 68, 68, 0.25); color: #FCA5A5; border: 1px solid #EF4444; padding: 1px 5px; border-radius: 4px; font-weight: 700; font-size: 10px;" title="Orden en corrección urgente">🚨 Urgente</span>'
             elif val_upper in ["SI", "SÍ"]:
@@ -1143,13 +1145,15 @@ def render_tablero_fluido():
             total_pend = max(0, total_reg - total_env)
 
             col_cer_check = next((c for c in df_vista.columns if "CER" in c.upper()), None)
+            col_env_check = next((c for c in df_vista.columns if "ENV" in c.upper()), None)
             
             for _, r_m in df_vista.iterrows():
                 cer_m = str(r_m[col_cer_check]).strip().upper() if col_cer_check and pd.notna(r_m[col_cer_check]) else ""
+                env_m = str(r_m[col_env_check]).strip().upper() if col_env_check and pd.notna(r_m[col_env_check]) else ""
                 
                 if "CORREC" in cer_m:
                     cant_correcciones += 1
-                elif cer_m != "" and cer_m not in ["SI", "SÍ"] and "REVISADO" not in cer_m:
+                elif cer_m in ["SI", "SÍ"] and env_m not in ["SI", "SÍ"] and "REVISADO" not in cer_m:
                     cant_atascadas += 1
 
             df_hoy = df_vista[df_vista["Fecha_dt"] == hoy_dt].copy()
@@ -1247,14 +1251,22 @@ def render_tablero_fluido():
                     st.button("❌", on_click=borrar_busqueda, key="btn_x_clear", help="Limpiar búsqueda")
 
         col_cer_f = next((c for c in df_vista.columns if "CER" in c.upper()), None)
+        col_env_f = next((c for c in df_vista.columns if "ENV" in c.upper()), None)
 
         if st.session_state.alert_filter == "ATASCADAS" and col_cer_f:
-            df_vista = df_vista[
-                (df_vista[col_cer_f].astype(str).str.strip() != "")
-                & (~df_vista[col_cer_f].astype(str).str.upper().isin(["SI", "SÍ"]))
-                & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
-                & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("REVISADO", na=False))
-            ]
+            if col_env_f:
+                df_vista = df_vista[
+                    (df_vista[col_cer_f].astype(str).str.strip().str.upper().isin(["SI", "SÍ"]))
+                    & (~df_vista[col_env_f].astype(str).str.strip().str.upper().isin(["SI", "SÍ"]))
+                    & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
+                    & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("REVISADO", na=False))
+                ]
+            else:
+                df_vista = df_vista[
+                    (df_vista[col_cer_f].astype(str).str.strip().str.upper().isin(["SI", "SÍ"]))
+                    & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False))
+                    & (~df_vista[col_cer_f].astype(str).str.upper().str.contains("REVISADO", na=False))
+                ]
         elif st.session_state.alert_filter == "CORRECCION" and col_cer_f:
             df_vista = df_vista[df_vista[col_cer_f].astype(str).str.upper().str.contains("CORREC", na=False)]
 
@@ -1524,84 +1536,77 @@ def render_tablero_fluido():
                     c_ack1, c_ack2, c_del = st.columns([0.48, 0.32, 0.20])
                     with c_ack1:
                         idx_ack_local = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
-                        usr_confirm = st.selectbox(
-                            "Confirmar",
+                        usuario_ack = st.selectbox(
+                            "Quien realiza:",
                             options=LISTA_EMISORES,
                             index=idx_ack_local,
-                            key=f"sel_ack_usr_{msg['id']}_{idx_m}",
-                            label_visibility="collapsed"
+                            key=f"bit_user_ack_{msg.get('id')}"
                         )
                     with c_ack2:
-                        lbl_action = "✅ Realizado" if msg.get("prioridad") != "Urgente" else "✅ Enterado"
-                        if st.button(lbl_action, key=f"btn_enterado_{msg['id']}_{idx_m}"):
+                        if st.button("✔ Marcar Atendido", key=f"btn_ack_{msg.get('id')}"):
                             msg["estado"] = "Atendido"
-                            msg["usuario_enterado"] = usr_confirm
-                            msg["fecha_enterado"] = datetime.now(COT).strftime("%d/%m/%Y %H:%M:%S")
+                            msg["usuario_enterado"] = usuario_ack
+                            msg["fecha_enterado"] = datetime.now(COT).strftime("%d/%m/%Y %H:%M")
                             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                            st.session_state.emisor_local = usr_confirm
+                            st.session_state.emisor_local = usuario_ack
                             st.rerun()
                     with c_del:
-                        if st.button("🗑️ Borrar", key=f"btn_del_urg_{msg['id']}_{idx_m}"):
-                            ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m["id"] != msg["id"]]
+                        if st.button("🗑️", key=f"btn_del_{msg.get('id')}", help="Eliminar novedad"):
+                            ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m.get("id") != msg.get("id")]
                             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.rerun()
 
                 else:
-                    c_del_at, _ = st.columns([0.30, 0.70])
-                    with c_del_at:
-                        if st.button("🗑️ Eliminar", key=f"btn_del_atend_{msg['id']}_{idx_m}"):
-                            ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m["id"] != msg["id"]]
+                    c_ack_info, c_del = st.columns([0.80, 0.20])
+                    with c_ack_info:
+                        st.caption(f"✓ Atendido por {msg.get('usuario_enterado')} ({msg.get('fecha_enterado')})")
+                    with c_del:
+                        if st.button("🗑️", key=f"btn_del_at_{msg.get('id')}", help="Eliminar novedad"):
+                            ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m.get("id") != msg.get("id")]
                             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.rerun()
 
                 if msg.get("permitir_respuestas", False):
-                    mostrar_hilo = msg.get("mostrar_respuestas", False)
-                    c_resp_toggle, _ = st.columns([0.40, 0.60])
-                    with c_resp_toggle:
-                        lbl_r_toggle = "💬 Ocultar hilo" if mostrar_hilo else "💬 Responder"
-                        if st.button(lbl_r_toggle, key=f"btn_tgl_resp_{msg['id']}_{idx_m}"):
-                            msg["mostrar_respuestas"] = not mostrar_hilo
-                            st.rerun()
+                    num_resp = len(msg.get("respuestas", []))
+                    btn_label_resp = f"💬 Hilo de Respuestas ({num_resp})"
+                    if st.button(btn_label_resp, key=f"btn_toggle_resp_{msg.get('id')}"):
+                        msg["mostrar_respuestas"] = not msg.get("mostrar_respuestas", False)
+                        st.rerun()
 
                     if msg.get("mostrar_respuestas", False):
-                        with st.container():
-                            st.markdown("<div style='margin-left: 10px; border-left: 2px solid #374151; padding-left: 8px;'>", unsafe_allow_html=True)
-                            c_r1, c_r2 = st.columns([0.45, 0.55])
-                            with c_r1:
-                                idx_resp_local = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
-                                usr_resp = st.selectbox(
-                                    "Responde:",
-                                    options=LISTA_EMISORES,
-                                    index=idx_resp_local,
-                                    key=f"sel_usr_resp_{msg['id']}_{idx_m}"
-                                )
-                            with c_r2:
-                                txt_resp = st.text_input(
-                                    "Mensaje de respuesta:",
-                                    placeholder="Escribe tu respuesta...",
-                                    key=f"in_txt_resp_{msg['id']}_{idx_m}",
-                                    label_visibility="collapsed"
-                                )
-                            if st.button("Enviado 💬", key=f"btn_send_resp_{msg['id']}_{idx_m}"):
-                                if txt_resp.strip():
-                                    msg["respuestas"].append({
-                                        "usuario": usr_resp,
-                                        "texto": txt_resp.strip(),
-                                        "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M")
-                                    })
-                                    guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                                    st.session_state.emisor_local = usr_resp
-                                    st.rerun()
-                            st.markdown("</div>", unsafe_allow_html=True)
+                        st.markdown("<div style='margin-left: 10px; border-left: 2px solid #3B82F6; padding-left: 6px;'>", unsafe_allow_html=True)
+                        c_r_u, c_r_t = st.columns([0.4, 0.6])
+                        with c_r_u:
+                            idx_resp_user = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
+                            u_resp = st.selectbox(
+                                "De:",
+                                options=LISTA_EMISORES,
+                                index=idx_resp_user,
+                                key=f"resp_u_{msg.get('id')}"
+                            )
+                        with c_r_t:
+                            txt_resp = st.text_input(
+                                "Respuesta:",
+                                placeholder="Escribe un comentario...",
+                                key=f"resp_t_{msg.get('id')}"
+                            )
 
-                st.markdown("<div style='margin-bottom: 6px;'></div>", unsafe_allow_html=True)
+                        if st.button("✉️ Enviar Respuesta", key=f"btn_send_resp_{msg.get('id')}"):
+                            if txt_resp.strip():
+                                nueva_r = {
+                                    "usuario": u_resp,
+                                    "texto": txt_resp.strip(),
+                                    "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M")
+                                }
+                                msg.setdefault("respuestas", []).append(nueva_r)
+                                guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
+                                st.session_state.emisor_local = u_resp
+                                st.rerun()
+                        st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown("<div style='margin-bottom: 4px;'></div>", unsafe_allow_html=True)
 
-    if not df_ocultas.empty:
-        st.markdown("<hr style='border-color: #1F2937; margin: 12px 0 8px 0;'>", unsafe_allow_html=True)
-        with st.expander(f"👁️ Desplegar Órdenes Ocultas ({len(df_ocultas)})", expanded=False):
-            st.markdown(render_dark_table(df_ocultas), unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------
