@@ -108,7 +108,7 @@ if "emisor_local" not in st.session_state:
 
 
 # ---------------------------------------------------------
-# ESTILOS MODO OSCURO + FIX DE VISIBILIDAD DE INPUTS & TOGGLES
+# ESTILOS MODO OSCURO + FIX DE VISIBILIDAD DE INPUTS & BOTONES
 # ---------------------------------------------------------
 st.markdown(
     """
@@ -210,8 +210,11 @@ st.markdown(
         margin-bottom: 2px;
     }
 
-    /* CONTROLES Y BOTONES GENERALES ESTÁNDAR COMPACTOS */
-    div.stButton > button {
+    /* CONTROLES Y BOTONES GENERALES ESTÁNDAR (FIX DE VISIBILIDAD) */
+    div.stButton > button,
+    button[data-testid="stBaseButton-secondary"],
+    button[data-testid="stBaseButton-primary"],
+    [data-testid="stButton"] > button {
         background-color: #1E293B !important;
         color: #38BDF8 !important;
         border: 1px solid #3B82F6 !important;
@@ -220,16 +223,34 @@ st.markdown(
         font-size: 10.5px !important;
         padding: 1px 3px !important;
         width: 100% !important;
-        height: 25px !important;
-        min-height: 25px !important;
+        height: 26px !important;
+        min-height: 26px !important;
         transition: all 0.2s ease-in-out !important;
     }
-    div.stButton > button:hover {
+    div.stButton > button:hover,
+    button[data-testid="stBaseButton-secondary"]:hover,
+    button[data-testid="stBaseButton-primary"]:hover,
+    [data-testid="stButton"] > button:hover {
         background-color: #2563EB !important;
         color: #FFFFFF !important;
         border-color: #60A5FA !important;
         cursor: pointer !important;
         box-shadow: 0 0 8px rgba(59, 130, 246, 0.5) !important;
+    }
+    /* FORZAR VISIBILIDAD DE TEXTOS E ÍCONOS DENTRO DEL BOTÓN */
+    div.stButton > button *,
+    button[data-testid="stBaseButton-secondary"] *,
+    button[data-testid="stBaseButton-primary"] *,
+    [data-testid="stButton"] > button * {
+        color: #38BDF8 !important;
+        font-size: 10.5px !important;
+        font-weight: 700 !important;
+    }
+    div.stButton > button:hover *,
+    button[data-testid="stBaseButton-secondary"]:hover *,
+    button[data-testid="stBaseButton-primary"]:hover *,
+    [data-testid="stButton"] > button:hover * {
+        color: #FFFFFF !important;
     }
 
     /* SELECTOR SEGMENTADO MODO OSCURO (RADIO BUTTONS) */
@@ -389,7 +410,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# SISTEMA DE NOTIFICACIONES DE ESCRITORIO MEJORADAS & AUDIO
+# SISTEMA DE NOTIFICACIONES MEJORADAS & FORZADO EN PANTALLA
 # ---------------------------------------------------------
 def solicitar_permisos_notificaciones_js():
     components.html(
@@ -401,9 +422,9 @@ def solicitar_permisos_notificaciones_js():
             if (navNotif) {
                 navNotif.requestPermission().then(function(perm) {
                     if (perm === "granted") {
-                        alert("✅ Notificaciones del sistema y sonido activados correctamente.");
+                        alert("✅ Notificaciones del sistema activadas correctamente.");
                     } else {
-                        alert("⚠ Debes permitir las notificaciones en el navegador para recibir las alertas flotantes.");
+                        alert("⚠ Notificaciones nativas no otorgadas. Se activaron los banners emergentes forzados en pantalla.");
                     }
                 });
             }
@@ -450,16 +471,45 @@ def emitir_notificacion_y_audio_js(msg_id, emisor, receptor, prioridad, contenid
             if (msgId && !parentWin._processedMsgs[msgId]) {{
                 parentWin._processedMsgs[msgId] = true;
 
-                // 1. NOTIFICACIÓN DE ESCRITORIO FLOTANTE (SE MANTIENE EN PANTALLA HASTA CERRAR CON X)
-                if (navNotif && navNotif.permission === "granted") {{
-                    var titulo = tituloCustom;
-                    if (!titulo) {{
-                        if (prioridad === 'Urgente') titulo = "🚨 ¡ALERTA URGENTE DE LABORATORIO!";
-                        else if (prioridad === 'Visto') titulo = "👁️ NOVEDAD VISTA EN BITÁCORA";
-                        else if (prioridad === 'Realizado') titulo = "✅ NOVEDAD REALIZADA EN BITÁCORA";
-                        else titulo = "💬 NUEVA NOVEDAD DE BITÁCORA";
+                var titulo = tituloCustom;
+                if (!titulo) {{
+                    if (prioridad === 'Urgente') titulo = "🚨 ¡ALERTA URGENTE DE LABORATORIO!";
+                    else if (prioridad === 'Visto') titulo = "👁️ NOVEDAD VISTA EN BITÁCORA";
+                    else if (prioridad === 'Realizado') titulo = "✅ NOVEDAD REALIZADA EN BITÁCORA";
+                    else titulo = "💬 NUEVA NOVEDAD DE BITÁCORA";
+                }}
+                var cuerpo = emisor + " ➔ " + receptor + "\\n📝 " + contenido;
+
+                // 1. NOTIFICACIÓN VISUAL FORZADA EN PANTALLA (TOAST BANNER IN-APP)
+                // Se ejecuta SIEMPRE aunque el navegador o SO no tenga permisos.
+                try {{
+                    var doc = parentWin.document;
+                    var container = doc.getElementById('custom-toast-container');
+                    if (!container) {{
+                        container = doc.createElement('div');
+                        container.id = 'custom-toast-container';
+                        container.style.cssText = 'position:fixed; top:20px; right:20px; z-index:999999; display:flex; flex-direction:column; gap:8px; max-width:380px; pointer-events:auto; font-family:sans-serif;';
+                        doc.body.appendChild(container);
                     }}
-                    var cuerpo = emisor + " ➔ " + receptor + "\\n📝 " + contenido;
+
+                    var toast = doc.createElement('div');
+                    var bgColor = (prioridad === 'Urgente') ? '#450A0A' : ((prioridad === 'Realizado') ? '#064E3B' : '#111827');
+                    var borderColor = (prioridad === 'Urgente') ? '#EF4444' : ((prioridad === 'Realizado') ? '#10B981' : '#3B82F6');
+                    
+                    toast.style.cssText = 'background:' + bgColor + '; color:#FFFFFF; border:2px solid ' + borderColor + '; border-radius:8px; padding:10px 14px; box-shadow:0 8px 25px rgba(0,0,0,0.7); font-size:12px; line-height:1.3; position:relative; transition:all 0.3s ease;';
+                    toast.innerHTML = '<div style="font-weight:800; font-size:13px; margin-bottom:3px; padding-right:16px;">' + titulo + '</div>' +
+                                      '<div style="font-size:11px; color:#9CA3AF; margin-bottom:4px;"><strong>De:</strong> ' + emisor + ' &nbsp;|&nbsp; <strong>Para:</strong> ' + receptor + '</div>' +
+                                      '<div style="font-weight:600; color:#F3F4F6;">' + contenido + '</div>' +
+                                      '<button onclick="this.parentElement.remove()" style="position:absolute; top:4px; right:6px; background:none; border:none; color:#AAA; font-size:14px; font-weight:bold; cursor:pointer;">✕</button>';
+                    
+                    container.appendChild(toast);
+                    setTimeout(function() {{
+                        if (toast && toast.parentNode) toast.parentNode.removeChild(toast);
+                    }}, 12000);
+                }} catch(e) {{ console.error("Error al mostrar banner en pantalla:", e); }}
+
+                // 2. NOTIFICACIÓN FLOTANTE DE ESCRITORIO (DEL NAVEGADOR)
+                if (navNotif && navNotif.permission === "granted") {{
                     var icono = (prioridad === 'Urgente') 
                         ? "https://cdn-icons-png.flaticon.com/512/1827/1827504.png"
                         : ((prioridad === 'Realizado') ? "https://cdn-icons-png.flaticon.com/512/190/190411.png" : "https://cdn-icons-png.flaticon.com/512/3718/3718167.png");
@@ -471,12 +521,12 @@ def emitir_notificacion_y_audio_js(msg_id, emisor, receptor, prioridad, contenid
                             badge: icono,
                             tag: msgId,
                             renotify: true,
-                            requireInteraction: requireInteraction // No se quita hasta dar clic en X
+                            requireInteraction: requireInteraction
                         }});
-                    }} catch(e) {{ console.error("Error en notificación:", e); }}
+                    }} catch(e) {{ console.error("Error en notificación nativa:", e); }}
                 }}
 
-                // 2. REPRODUCIR SONIDO SOLO SI ES URGENTE
+                // 3. REPRODUCIR SONIDO SOLO SI ES URGENTE
                 if (prioridad === "Urgente" && soundEnabled) {{
                     try {{
                         var AudioCtx = parentWin.AudioContext || parentWin.webkitAudioContext;
@@ -760,7 +810,7 @@ def render_chat_message_html(msg, cycle_sec=0, cycle_num=0):
         hrs = min_elapsed // 60
         time_elapsed_str = f"⏱️ Hace {hrs}h {min_elapsed % 60}m"
     elif min_elapsed > 0:
-        time_elapsed_str = f"⏱️ Hace {min_elapsed}m"
+        time_elapsed_str = f"⏱️️ Hace {min_elapsed}m"
     else:
         time_elapsed_str = "⏱️ Hace un momento"
 
@@ -1541,7 +1591,7 @@ def render_tablero_fluido():
                     unsafe_allow_html=True
                 )
 
-                # FILA COMPACTA CON TRES BOTONES: 👁️ Visto, ✅ Realizado y 🗑️ Borrar
+                # FILA COMPACTA CON BOTONES: 👁️ Visto, ✅ Realizado y 🗑️ Borrar
                 if msg.get("estado") in ["Pendiente", "Visto"]:
                     c_u, c_visto, c_real, c_del = st.columns([0.38, 0.22, 0.25, 0.15])
                     
@@ -1564,7 +1614,7 @@ def render_tablero_fluido():
                                 guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                                 st.session_state.emisor_local = usuario_action
                                 
-                                # Notificación flotante fija (sin sonido)
+                                # Notificación flotante forzada
                                 if st.session_state.get("notif_enabled", True):
                                     emitir_notificacion_y_audio_js(
                                         msg_id=f"notif_visto_{msg.get('id')}_{int(time.time())}",
@@ -1588,7 +1638,7 @@ def render_tablero_fluido():
                             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.session_state.emisor_local = usuario_action
                             
-                            # Notificación flotante fija (sin sonido)
+                            # Notificación flotante forzada
                             if st.session_state.get("notif_enabled", True):
                                 emitir_notificacion_y_audio_js(
                                     msg_id=f"notif_realizado_{msg.get('id')}_{int(time.time())}",
@@ -1613,55 +1663,15 @@ def render_tablero_fluido():
                     with c_ack_info:
                         st.caption(f"✓ Realizado por {msg.get('usuario_enterado')} ({msg.get('fecha_enterado')})")
                     with c_del:
-                        if st.button("🗑️", key=f"btn_del_at_{msg.get('id')}", help="Eliminar novedad"):
+                        if st.button("🗑️", key=f"btn_del_fin_{msg.get('id')}", help="Eliminar novedad"):
                             ESTADO_GLOBAL["mensajes_bitacora"] = [m for m in ESTADO_GLOBAL["mensajes_bitacora"] if m.get("id") != msg.get("id")]
                             guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
                             st.rerun()
-
-                if msg.get("permitir_respuestas", False):
-                    num_resp = len(msg.get("respuestas", []))
-                    btn_label_resp = f"💬 Hilo de Respuestas ({num_resp})"
-                    if st.button(btn_label_resp, key=f"btn_toggle_resp_{msg.get('id')}"):
-                        msg["mostrar_respuestas"] = not msg.get("mostrar_respuestas", False)
-                        st.rerun()
-
-                    if msg.get("mostrar_respuestas", False):
-                        st.markdown("<div style='margin-left: 10px; border-left: 2px solid #3B82F6; padding-left: 6px;'>", unsafe_allow_html=True)
-                        c_r_u, c_r_t = st.columns([0.4, 0.6])
-                        with c_r_u:
-                            idx_resp_user = LISTA_EMISORES.index(st.session_state.emisor_local) if st.session_state.emisor_local in LISTA_EMISORES else 0
-                            u_resp = st.selectbox(
-                                "De:",
-                                options=LISTA_EMISORES,
-                                index=idx_resp_user,
-                                key=f"resp_u_{msg.get('id')}"
-                            )
-                        with c_r_t:
-                            txt_resp = st.text_input(
-                                "Respuesta:",
-                                placeholder="Escribe un comentario...",
-                                key=f"resp_t_{msg.get('id')}"
-                            )
-
-                        if st.button("✉️ Enviar Respuesta", key=f"btn_send_resp_{msg.get('id')}"):
-                            if txt_resp.strip():
-                                nueva_r = {
-                                    "usuario": u_resp,
-                                    "texto": txt_resp.strip(),
-                                    "fecha_hora": datetime.now(COT).strftime("%d/%m/%Y %H:%M")
-                                }
-                                msg.setdefault("respuestas", []).append(nueva_r)
-                                guardar_bitacora_local(ESTADO_GLOBAL["mensajes_bitacora"])
-                                st.session_state.emisor_local = u_resp
-                                st.rerun()
-                        st.markdown("</div>", unsafe_allow_html=True)
-
-                st.markdown("<div style='margin-bottom: 4px;'></div>", unsafe_allow_html=True)
 
             st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------
-# EJECUCIÓN PRINCIPAL
+# EJECUCIÓN PRINCIPAL DE LA APLICACIÓN
 # ---------------------------------------------------------
 render_tablero_fluido()
